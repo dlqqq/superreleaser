@@ -30,11 +30,17 @@ def publish(pr_url):
         "`<pkg> v<version> (#N)`.",
     )
 
+    # BashSensor runs bash_command literally (no template_searchpath / .sh
+    # lookup, unlike BashOperator) and has no append_env — passing env= would
+    # REPLACE the environment and drop PATH (conda not found). So inherit the
+    # environment (no env=) and Jinja-template the params straight into the
+    # command (trusted DAG params, not arbitrary input). `conda search` exits 0
+    # when the exact version is on the channel, non-zero to keep polling.
     await_conda_forge = BashSensor(
         task_id="await_conda_forge",
         task_display_name="Await conda-forge availability",
-        bash_command="await_conda_forge.sh",
-        env=ENV,
+        bash_command="conda search -c conda-forge "
+        "'{{ params.package }}=={{ params.version }}' >/dev/null 2>&1",
         poke_interval=60,
         mode="reschedule",
         timeout=60 * 60 * 2,
