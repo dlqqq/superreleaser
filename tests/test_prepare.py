@@ -16,7 +16,6 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "dags"))
 
 from cf_tasks import prepare  # noqa: E402
-from airflow.sdk.exceptions import AirflowFailException  # noqa: E402
 
 
 RECIPE = """\
@@ -34,21 +33,22 @@ requirements:
 
 @pytest.fixture
 def recipe_file(tmp_path):
-    p = tmp_path / "recipe.yaml"
-    p.write_text(RECIPE)
-    return str(p)
+    """Write RECIPE to a temp feedstock layout and point config there, so
+    compute_req_diff (which reads config.recipe_path(package)) finds it."""
+    from superreleaser import config
+    fs = tmp_path / "jupyter-ai-acp-client-feedstock" / "recipe"
+    fs.mkdir(parents=True)
+    (fs / "recipe.yaml").write_text(RECIPE)
+    orig = config.FEEDSTOCKS_ROOT
+    config.FEEDSTOCKS_ROOT = tmp_path
+    yield str(fs / "recipe.yaml")
+    config.FEEDSTOCKS_ROOT = orig
 
 
-def test_guard_version_accepts_bump(recipe_file):
-    out = json.dumps({"proposed": "v0.2.1", "recipe": recipe_file})
-    assert prepare._guard_version(out) == "0.2.1"
-
-
-def test_guard_version_rejects_non_bump(recipe_file):
-    for bad in ("0.2.0", "0.1.0"):  # equal or lower
-        out = json.dumps({"proposed": bad, "recipe": recipe_file})
-        with pytest.raises(AirflowFailException):
-            prepare._guard_version(out)
+# The Python task's underlying function (unwrapped) — call it directly with a
+# fake context in place of Airflow's params injection.
+_compute = prepare.compute_req_diff.function
+_PKG = {"params": {"package": "jupyter-ai-acp-client"}}
 
 
 def test_proc_pypi_requirements_drops_extras_and_sorts():
@@ -64,12 +64,11 @@ def test_proc_pypi_requirements_drops_extras_and_sorts():
     ]
 
 
-def test_compute_diff_maps_conda_names_and_ranges(recipe_file, monkeypatch):
+def test_compute_diff_maps_conda_names_and_ranges(recipe_file):
     # jupyter-server (PyPI) must map to the recipe's existing jupyter_server.
     reqs = [{"name": "jupyter-server", "spec": ">=2.5.0,<3"},
             {"name": "pydantic", "spec": ">=2,<3"}]
-    out = json.dumps({"reqs": reqs, "recipe": recipe_file})
-    diff = prepare._compute_diff(out)
+    diff = _compute(reqs, **_PKG)
     # jupyter_server range changed → present; pydantic unchanged → deduped out.
     assert diff["jupyter_server"] == {
         "old": ">=2.4.0,<3", "new": ">=2.5.0,<3", "resolved": True}
@@ -80,14 +79,12 @@ def test_compute_diff_dedupes_unchanged(recipe_file):
     # Every range identical to the recipe → empty diff (nothing to change).
     reqs = [{"name": "jupyter-server", "spec": ">=2.4.0,<3"},
             {"name": "pydantic", "spec": ">=2,<3"}]
-    out = json.dumps({"reqs": reqs, "recipe": recipe_file})
-    assert prepare._compute_diff(out) == {}
+    assert _compute(reqs, **_PKG) == {}
 
 
 def test_compute_diff_flags_new_unresolved_dep(recipe_file, monkeypatch):
     from superreleaser import condaforge
     monkeypatch.setattr(condaforge, "resolve_conda_name", lambda n: None)
     reqs = [{"name": "totally-new-dep", "spec": ">=1"}]
-    out = json.dumps({"reqs": reqs, "recipe": recipe_file})
-    diff = prepare._compute_diff(out)
+    diff = _compute(reqs, **_PKG)
     assert diff["totally-new-dep"] == {"old": None, "new": ">=1", "resolved": False}

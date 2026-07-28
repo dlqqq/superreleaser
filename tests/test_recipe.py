@@ -45,7 +45,6 @@ requirements:
 def test_read_fields():
     assert rcp.current_version(SAMPLE) == "0.2.0"
     assert rcp.pypi_name(SAMPLE) == "jupyter-ai-acp-client"
-    assert rcp.conda_package_name(SAMPLE) == "jupyter-ai-acp-client"
     run = rcp.current_run_requirements(SAMPLE)
     assert "jupyter_server >=2.4.0,<3" in run
     assert "jupyterlab-chat >=0.23.0" in run
@@ -63,6 +62,25 @@ def test_is_published_matches_exact_version(monkeypatch):
     assert condaforge.is_published("jupyter-ai-acp-client", "0.2.0") is True
     assert condaforge.is_published("jupyter-ai-acp-client", "v0.2.0") is True  # v-prefix ok
     assert condaforge.is_published("jupyter-ai-acp-client", "0.2.1") is False
+
+
+def test_apply_req_diff_applies_changes_keeps_rest_appends_new():
+    existing = [
+        "python >=${{ python_min }}",
+        "jupyter_server >=2.4.0,<3",
+        "pydantic >=2,<3",
+    ]
+    diff = {
+        "jupyter_server": {"old": ">=2.4.0,<3", "new": ">=2.5.0,<3"},  # changed
+        "brand-new-dep": {"old": None, "new": ">=1,<2"},               # new dep
+    }
+    run = rcp.apply_req_diff(existing, diff)
+    assert run == [
+        "python >=${{ python_min }}",        # untouched (not in diff)
+        "jupyter_server >=2.5.0,<3",         # range updated
+        "pydantic >=2,<3",                   # untouched
+        "brand-new-dep >=1,<2",              # appended
+    ]
 
 
 def test_apply_update_preserves_templating_and_bumps():

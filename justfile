@@ -37,30 +37,12 @@ reset:
 test:
     uv run pytest -q
 
-# Run the `prepare` task group end-to-end in one local process (no scheduler/UI)
-# via `airflow dags test`. Safe: clones/forks the feedstock and computes the diff,
-# nothing destructive. Initializes the SQLite DB on first use.
-test-prep package="jupyter-ai-acp-client" version="0.2.1":
+# Trigger the conda-forge release DAG for a package + explicit version. It opens
+# a real feedstock PR and merges after CI green + your approval in the UI — so
+# `just start` the server first and drive the gate there.
+release package version:
     #!/usr/bin/env bash
     set -eo pipefail
-    uv run airflow db migrate >/dev/null 2>&1
     conf=$(printf '{"package":"%s","version":"%s"}' "{{ package }}" "{{ version }}")
-    echo "dags test test-cf-release-prep --conf $conf"
-    uv run airflow dags test test-cf-release-prep --conf "$conf"
-
-# Trigger the single-package release DAG (dry-run by default).
-# Force a target with version=0.2.0; set dry_run=false for a real release.
-release package version="" dry_run="true":
-    #!/usr/bin/env bash
-    set -eo pipefail
-    conf=$(printf '{"package":"%s","version":"%s","dry_run":%s}' "{{ package }}" "{{ version }}" "{{ dry_run }}")
     echo "conf: $conf"
     uv run airflow dags trigger cf_release --conf "$conf"
-
-# Trigger the batch DAG from a plan JSON file (default: the sample two-wave plan).
-release-batch plan=(root / "sample_batch_plan.json"):
-    #!/usr/bin/env bash
-    set -eo pipefail
-    conf=$(cat "{{ plan }}")
-    echo "plan ({{ plan }}):"; echo "$conf"
-    uv run airflow dags trigger cf_release_batch --conf "$conf"

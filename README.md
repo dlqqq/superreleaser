@@ -105,64 +105,34 @@ just start       # launch Airflow all-in-one on SQLite; UI at http://localhost:8
 foreground — leave it up. Then, from another shell:
 
 ```bash
-just release jupyter-ai-acp-client                 # dry-run, earliest-missing version
-just release jupyter-ai-acp-client 0.2.0           # dry-run, forced version
-just release jupyter-ai-acp-client 0.2.0 false     # REAL release (opens PR, merges on approval)
+just release jupyter-ai-acp-client 0.2.1     # package + explicit version
 ```
 
 or trigger `cf_release` from the UI with a conf like
-`{ "package": "jupyter-ai-acp-client", "dry_run": true }`.
+`{ "package": "jupyter-ai-acp-client", "version": "0.2.1" }`.
 
-- `dry_run: true` (default) → edits the local recipe but **prints** the
-  branch/push/PR/comment/merge commands instead of running them. Safe to walk the
-  whole DAG.
-- `dry_run: false` → **opens a real feedstock PR** (+ rerender comment) and, on
-  approval, **merges it**.
-- a specific `version` → force a target instead of earliest-missing.
+The version is **explicit** (the package must already be published to PyPI at
+that version). The DAG then, in order:
+
+1. **prepare** — clone + fork the feedstock, compute the run-requirement diff,
+   verify each dep exists on conda-forge.
+2. **update_recipe** — worktree in `/tmp`, apply the diff + bump version/sha256,
+   commit + push to your fork, open the PR (titled exactly `<pkg> v<version>`),
+   then `conda smithy rerender` and push the rerender commit.
+3. **wait_for_ci** and **approval** — run in parallel; CI must go green *and* you
+   must approve in the UI.
+4. **merge** — squash-merge as `<pkg> v<version> (#N)`.
+5. **await_conda_forge** — poll (`conda search`, every 60s) until the version is
+   downloadable.
+6. **cleanup** — remove the `/tmp` worktree (always runs).
 
 At the `approval` task the run enters `awaiting_input`; open it in the UI and
-click **Approve** or **Reject**.
-
-## Releasing several packages in order (`cf_release_batch` DAG)
-
-To release a chain of packages — e.g. `jupyter-ai-acp-client 0.2.1` then
-`jupyter-ai 3.1.1`, which depends on it — trigger `cf_release_batch` with an
-ordered plan of **waves**:
-
-```json
-{
-  "dry_run": true,
-  "waves": [
-    [ { "package": "jupyter-ai-acp-client", "version": "0.2.1" } ],
-    [ { "package": "jupyter-ai", "version": "3.1.1" } ]
-  ]
-}
-```
-
-```bash
-just release-batch                       # uses sample_batch_plan.json
-just release-batch path/to/plan.json     # or your own plan
-```
-
-The batch runs the full single-package `cf_release` pipeline once per package
-(each a child DAG run with its own PR and its own approval gate). Packages in the
-same wave release **concurrently**; waves run **in sequence**; any failure or
-rejection **stops the batch** so dependents never start.
-
-**Why in order, not all-parallel:** `jupyter-ai`'s recipe pins
-`jupyter-ai-acp-client >=0.2.1`, and `cf_release`'s verify step checks that range
-actually resolves on conda-forge — which is only true once acp-client's release
-has fully shipped. So an upstream must be **live** before a dependent's release
-begins; that's exactly what the topological wave order guarantees. Independent
-packages (no dependency between them) go in the same wave and parallelize.
-
-For now the plan must be **topologically sorted by hand** — the batch trusts the
-given order and doesn't compute the dependency graph itself.
+click **Approve** (→ merge) or **Reject** (→ fail the run, merge nothing).
 
 ## Guardrails
 
-- **Merge is gated behind the human.** The DAG opens/annotates the PR, waits for
-  the rerender + green CI, and only merges after you approve in the UI. Reject
-  merges nothing. `dry_run` prints the merge instead of doing it.
+- **Nothing merges without your approval.** The DAG opens the PR and waits at the
+  HITL gate; Reject fails the run and merges nothing. That gate is the safety —
+  keep an eye on the run and reject if the diff looks wrong.
 - `gh` auth comes from your shell. `AIRFLOW_HOME` (SQLite DB, logs, generated
   password) stays out of version control.

@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import yaml
 from packaging.version import InvalidVersion, Version
 
 from . import condaforge
@@ -17,42 +18,38 @@ from . import condaforge
 
 # --------------------------------------------------------------------------- #
 # Reading the recipe
+#
+# conda-forge recipes use `${{ ... }}` templating, but every such value is a
+# plain scalar string to a YAML parser, so PyYAML reads them fine. Reading with
+# yaml.safe_load is far more robust than regex-scraping the file.
 # --------------------------------------------------------------------------- #
+def _load(recipe_text: str) -> dict:
+    return yaml.safe_load(recipe_text) or {}
+
+
 def current_version(recipe_text: str) -> str:
-    m = re.search(
-        r'context:\s*\n(?:.*\n)*?\s+version:\s*["\']([^"\']+)["\']', recipe_text
-    )
-    if not m:
+    version = _load(recipe_text).get("context", {}).get("version")
+    if version is None:
         raise ValueError("could not parse context.version from recipe")
-    return m.group(1)
+    return str(version)
 
 
 def pypi_name(recipe_text: str) -> str:
-    m = re.search(r"pypi\.org/packages/source/./([^/${}]+)/", recipe_text)
+    # Prefer the source URL's project name; fall back to context.name.
+    url = _load(recipe_text).get("source", {}).get("url", "")
+    m = re.search(r"pypi\.org/packages/source/./([^/${}]+)/", url)
     if m:
         return m.group(1)
-    m = re.search(r"context:\s*\n(?:.*\n)*?\s+name:\s*(\S+)", recipe_text)
-    if m:
-        return m.group(1)
+    name = _load(recipe_text).get("context", {}).get("name")
+    if name:
+        return str(name)
     raise ValueError("could not parse PyPI name from recipe")
-
-
-def conda_package_name(recipe_text: str) -> str:
-    """The recipe's own `package.name` — the canonical conda-forge package name
-    (may differ from the PyPI name, e.g. `jupyter_server`)."""
-    m = re.search(r"\npackage:\s*\n(?:.*\n)*?\s+name:\s*(\S+)", recipe_text)
-    if not m:
-        raise ValueError("could not parse package.name from recipe")
-    return m.group(1).strip().strip("\"'")
 
 
 def current_run_requirements(recipe_text: str) -> list[str]:
     """The existing `requirements.run:` entries, verbatim (their conda names are
     already correct — we reuse them and only refresh version ranges)."""
-    m = re.search(r"\n  run:\n((?:    - .*\n)+)", recipe_text)
-    if not m:
-        return []
-    return [line.strip()[2:].strip() for line in m.group(1).splitlines()]
+    return list(_load(recipe_text).get("requirements", {}).get("run", []) or [])
 
 
 # --------------------------------------------------------------------------- #
@@ -200,6 +197,34 @@ def verify_run(run: list[str]) -> list[str]:
 # --------------------------------------------------------------------------- #
 # Writing the recipe
 # --------------------------------------------------------------------------- #
+def apply_req_diff(existing_run: list[str], diff: dict) -> list[str]:
+    """Build the full new `requirements.run` list by applying `diff` onto the
+    existing block.
+
+    `diff` is `{conda_name: {"old", "new", ...}}` (only changed deps, from
+    prepare's compute_req_diff). Existing entries whose name is in the diff get
+    their range replaced with `new`; entries not in the diff (e.g. the `python`
+    pin, unchanged deps) are kept verbatim; deps in the diff with no existing
+    entry (new deps) are appended. Ordering of existing entries is preserved.
+    """
+    result: list[str] = []
+    seen: set[str] = set()
+    for entry in existing_run:
+        name = _entry_name(entry)
+        seen.add(name)
+        if name in diff:
+            new_spec = diff[name]["new"]
+            result.append(f"{name} {new_spec}".strip() if new_spec else name)
+        else:
+            result.append(entry)
+    # Append brand-new deps (in the diff but not already in the run block).
+    for name, change in diff.items():
+        if name not in seen:
+            new_spec = change["new"]
+            result.append(f"{name} {new_spec}".strip() if new_spec else name)
+    return result
+
+
 def apply_update(recipe_text: str, version: str, sha256: str, run: list[str]) -> str:
     """Return updated recipe text: version, sha256, build number reset, and the
     run block replaced with `run` (preserving indentation)."""

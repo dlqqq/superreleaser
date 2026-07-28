@@ -1,10 +1,15 @@
-"""Task definitions for the `cf_release` DAG, split by phase for readability.
+"""Task groups for the `cf_release` DAG, one module per group.
 
-The DAG file (`dags/cf_release.py`) imports these and wires them together; each
-`@task` function's docstring becomes its `doc_md` in the Airflow UI automatically.
+The DAG (`dags/cf_release.py`) imports these and wires them together; each
+`@task` function's docstring becomes its `doc_md` in the Airflow UI.
 
-- `prepare`  — checkout, pick_version, update_recipe, verify_cf
-- `publish`  — open_pr, merge_pr, and the sensor poke-callables (CI waits,
-               conda-forge availability)
-- `gate`     — build the approval-gate Markdown body
+- `prepare`       — clone + fork the feedstock, compute the run-requirement diff,
+                    verify each dep exists on conda-forge
+- `update_recipe` — build the release branch locally (worktree → write recipe →
+                    rerender → single commit)
+- `open_pr`       — push the finished branch and open the PR
+- `_common`       — shared bootstrap + constants (SCRIPTS dir, bash env)
+
+Single-use tasks (CI wait, approval, merge, availability wait, cleanup) are
+defined inline in the DAG rather than here.
 """

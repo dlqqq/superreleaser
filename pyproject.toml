@@ -13,6 +13,8 @@ dependencies = [
     "packaging>=24.0",
     # DAG start_date / scheduling (Airflow dependency, pinned for reproducibility).
     "pendulum>=3.0,<4",
+    # Reading conda-forge recipe.yaml (ships via Airflow; declared as we import it).
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
