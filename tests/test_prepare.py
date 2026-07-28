@@ -70,9 +70,18 @@ def test_compute_diff_maps_conda_names_and_ranges(recipe_file, monkeypatch):
             {"name": "pydantic", "spec": ">=2,<3"}]
     out = json.dumps({"reqs": reqs, "recipe": recipe_file})
     diff = prepare._compute_diff(out)
+    # jupyter_server range changed → present; pydantic unchanged → deduped out.
     assert diff["jupyter_server"] == {
         "old": ">=2.4.0,<3", "new": ">=2.5.0,<3", "resolved": True}
-    assert diff["pydantic"]["old"] == ">=2,<3"
+    assert "pydantic" not in diff
+
+
+def test_compute_diff_dedupes_unchanged(recipe_file):
+    # Every range identical to the recipe → empty diff (nothing to change).
+    reqs = [{"name": "jupyter-server", "spec": ">=2.4.0,<3"},
+            {"name": "pydantic", "spec": ">=2,<3"}]
+    out = json.dumps({"reqs": reqs, "recipe": recipe_file})
+    assert prepare._compute_diff(out) == {}
 
 
 def test_compute_diff_flags_new_unresolved_dep(recipe_file, monkeypatch):
@@ -82,11 +91,3 @@ def test_compute_diff_flags_new_unresolved_dep(recipe_file, monkeypatch):
     out = json.dumps({"reqs": reqs, "recipe": recipe_file})
     diff = prepare._compute_diff(out)
     assert diff["totally-new-dep"] == {"old": None, "new": ">=1", "resolved": False}
-
-
-def test_verify_conda_raises_on_missing(monkeypatch):
-    from superreleaser import condaforge
-    monkeypatch.setattr(condaforge, "cf_package", lambda n: None)
-    diff = json.dumps({"pydantic": {"old": None, "new": ">=2", "resolved": True}})
-    with pytest.raises(AirflowFailException):
-        prepare._verify_conda(diff)

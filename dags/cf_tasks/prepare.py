@@ -167,14 +167,30 @@ def prepare():
         "deps get `old: null`; unresolvable conda names are flagged.",
     )
 
-    # 6. Verify every mapped dependency exists on the conda-forge channel.
+    # 6. Verify every dependency in the diff exists on the conda-forge channel,
+    #    by curling anaconda.org for each name (200 = exists, 404 = missing).
+    #    Pure bash so the exact checks show up in the task's rendered template.
     verify_conda = BashOperator(
         task_id="verify_conda",
-        bash_command="echo '{{ ti.xcom_pull(task_ids=\"prepare.dependency_diff\") | tojson }}'",
-        output_processor=_verify_conda,
-        doc_md="For each dependency in the diff, confirm a matching conda-forge "
-        "package exists; fail listing any that don't (so a human resolves the "
-        "name before a PR is opened).",
+        bash_command=(
+            'set -euo pipefail\n'
+            "diff='{{ ti.xcom_pull(task_ids=\"prepare.dependency_diff\") | tojson }}'\n"
+            'missing=""\n'
+            'for name in $(echo "$diff" | jq -r "keys[]"); do\n'
+            '  code=$(curl -s -o /dev/null -w "%{http_code}" '
+            '"https://api.anaconda.org/package/conda-forge/${name}")\n'
+            '  echo "${name}: HTTP ${code}"\n'
+            '  [ "$code" = "200" ] || missing="${missing} ${name}"\n'
+            'done\n'
+            'if [ -n "$missing" ]; then\n'
+            '  echo "ERROR: no conda-forge package for:${missing}" >&2\n'
+            '  exit 1\n'
+            'fi\n'
+            'echo "all dependencies exist on conda-forge"'
+        ),
+        doc_md="For each dependency in the diff, `curl` anaconda.org to confirm a "
+        "conda-forge package exists (200); fail listing any 404s so a human "
+        "resolves the name before a PR is opened.",
     )
 
     clone_feedstock >> ensure_fork >> check_version >> pypi_requirements
@@ -222,21 +238,9 @@ def _compute_diff(output: str) -> dict:
         conda = rcp._pypi_to_conda_via_existing(dep, existing_names) \
             or condaforge.resolve_conda_name(dep)
         key = conda or dep
-        diff[key] = {
-            "old": old_by_conda.get(key),
-            "new": spec,
-            "resolved": conda is not None,
-        }
-    return diff
-
-
-def _verify_conda(diff_json: str) -> dict:
-    """Confirm each dependency name exists on conda-forge; fail listing misses."""
-    diff = json.loads(diff_json)
-    missing = [name for name, d in diff.items()
-               if not d.get("resolved") or condaforge.cf_package(name) is None]
-    if missing:
-        raise AirflowFailException(
-            "no conda-forge package found for: " + ", ".join(sorted(missing))
-        )
+        old = old_by_conda.get(key)
+        # A diff shows only what CHANGES: skip deps whose range is unchanged.
+        if old == spec:
+            continue
+        diff[key] = {"old": old, "new": spec, "resolved": conda is not None}
     return diff
