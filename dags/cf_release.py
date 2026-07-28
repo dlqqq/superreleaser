@@ -29,16 +29,14 @@ HITL ApprovalOperator (built on 3.3.0 here).
 
 from __future__ import annotations
 
-import logging
 import sys
 from pathlib import Path
 
 import pendulum
 
 from airflow.sdk import dag, task
-from airflow.sdk.exceptions import AirflowFailException
+from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.hitl import ApprovalOperator
-from airflow.providers.standard.sensors.python import PythonSensor
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -49,20 +47,7 @@ from cf_tasks import (
     publish as publish_mod,
     cleanup as cleanup_mod,
 )
-from cf_tasks._common import SCRIPTS
-from superreleaser import gitops
-
-log = logging.getLogger("superreleaser.dag")
-
-
-def _ci_green(pr_url: str) -> bool:
-    """Sensor poke: True when the PR's checks are all green; raise (fail fast) if
-    any check failed; False (keep waiting) while pending."""
-    state = gitops.pr_checks_state(pr_url)
-    log.info("CI state for %s: %s", pr_url, state)
-    if state == "FAILURE":
-        raise AirflowFailException(f"feedstock CI failed: {pr_url}")
-    return state == "SUCCESS"
+from cf_tasks._common import BASE, ENV, SCRIPTS
 
 
 @task(task_id="build_gate_body", task_display_name="Build approval message")
@@ -120,15 +105,17 @@ def cf_release():
         fail_on_reject=True,
     )
 
-    wait_ci = PythonSensor(
+    # `gh pr checks --watch` polls internally and normalizes both check types
+    # (CheckRun + StatusContext), so it doesn't trip over StatusContext entries
+    # that have no `.conclusion`. Exit 0 = all passed; non-zero = a check failed
+    # (fails the task); --fail-fast bails on the first failure.
+    wait_ci = BashOperator(
         task_id="wait_for_ci",
         task_display_name="Await green CI",
-        python_callable=_ci_green,
-        op_args=[pr_url],
-        mode="reschedule",
-        poke_interval=60,
-        timeout=60 * 60 * 3,
-        doc_md="Poll the PR's checks until green; fail the run if CI fails.",
+        bash_command='gh pr checks "$PR_URL" --watch --fail-fast --interval 30',
+        env={**ENV, "PR_URL": pr_url},
+        **BASE,
+        doc_md="Block until the PR's checks finish; pass/fail on the result.",
     )
 
     # publish: merge the approved + CI-green PR, then await conda-forge availability.
