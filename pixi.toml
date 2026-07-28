@@ -1,0 +1,61 @@
+[workspace]
+name = "superreleaser"
+version = "0.1.0"
+description = "Local, human-gated conda-forge release orchestrator for Jupyter AI, built on Apache Airflow 3"
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "linux-64"]
+
+[dependencies]
+# Airflow 3.1+ is required for the HITL ApprovalOperator; the standard provider
+# ships the HITL, Bash, and Python operators/sensors the DAG uses.
+python = "3.12.*"
+apache-airflow = "3.3.*"
+apache-airflow-providers-standard = "1.15.*"
+# Release tooling — all real conda-forge packages (the whole point of pixi here):
+#   conda-smithy: feedstock rerender (kept current, unlike a stale global install)
+#   conda: `conda search` availability checks
+#   jq: JSON wrangling in the bash step scripts
+conda-smithy = ">=2026.6.14"
+conda = "*"
+jq = ">=1.7"
+# Application-logic deps used by the Python tasks.
+pyyaml = ">=6.0"
+packaging = ">=24.0"
+pendulum = ">=3.0,<4"
+
+[pypi-dependencies]
+# (none — everything resolves from conda-forge)
+
+[feature.dev.dependencies]
+pytest = ">=8"
+
+[environments]
+default = { features = ["dev"] }
+
+# Airflow env, always present in `pixi run`/`pixi shell`. $PIXI_PROJECT_ROOT is
+# set by pixi to the manifest dir. Auth disabled (localhost only); examples off.
+[activation.env]
+AIRFLOW_HOME = "$PIXI_PROJECT_ROOT/.airflow"
+AIRFLOW__CORE__DAGS_FOLDER = "$PIXI_PROJECT_ROOT/dags"
+AIRFLOW__CORE__LOAD_EXAMPLES = "False"
+AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS = "True"
+
+[tasks]
+# Start Airflow all-in-one (API server + scheduler + triggerer) on SQLite.
+# Foreground/long-lived — leave it up, open http://localhost:8080.
+start = "airflow standalone"
+
+# Run the unit tests (no network; recipe/diff/DAG-shape logic).
+test = "pytest -q"
+
+# Reset the local Airflow home (SQLite db, logs, config).
+reset = "rm -rf $AIRFLOW_HOME"
+
+# Trigger a conda-forge release for a package + explicit (already-published)
+# version, e.g. `pixi run release jupyter-ai-acp-client 0.2.1`. Opens a real PR
+# and merges after CI-green + your approval in the UI — so `pixi run start`
+# first and drive the gate there.
+release = { cmd = "airflow dags trigger cf_release --conf '{\"package\":\"{{ package }}\",\"version\":\"{{ version }}\"}'", args = [
+    "package",
+    "version",
+] }

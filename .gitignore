@@ -1,5 +1,5 @@
-# uv-managed virtualenv + lockfile artifacts
-.venv/
+# pixi-managed environments (pixi.lock IS committed for reproducibility)
+.pixi/
 
 # Airflow local home: SQLite db, logs, generated admin password
 .airflow/

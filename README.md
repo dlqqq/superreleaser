@@ -83,8 +83,7 @@ superreleaser/
 │   ├── recipe.py             # recipe read/edit + version selection + dep mapping
 │   └── gitops.py             # git/gh ops (dry-run aware)
 ├── tests/                    # unit tests (no network)
-├── justfile                  # setup / start / release recipes
-└── pyproject.toml            # pinned deps (uv)
+└── pixi.toml                 # conda-forge deps + tasks (start / test / release)
 ```
 
 Each `@task`'s **docstring** becomes its description in the Airflow UI, so the
@@ -92,38 +91,42 @@ task modules read as normal Python with no inline `doc_md` clutter.
 
 ## Run it locally (single user, SQLite)
 
-Requires [`uv`](https://docs.astral.sh/uv/) and [`just`](https://just.systems/),
-plus a `gh` CLI authenticated in your shell. Airflow **3.1+** is required for the
-HITL gate (pinned to 3.3.0).
+Managed entirely with [`pixi`](https://pixi.sh) — every dependency (Airflow,
+conda-smithy, conda, jq, …) comes from conda-forge, so there's no separate
+Python venv to manage and `conda-smithy` stays current. You also need a `gh` CLI
+authenticated in your shell.
 
 ```bash
-just setup       # install deps into a local .venv (uv)
-just start       # launch Airflow all-in-one on SQLite; UI at http://localhost:8080
+pixi install                                  # create the conda-forge env
+pixi run start                                # Airflow all-in-one on SQLite; UI at http://localhost:8080
 ```
 
-`just start` disables auth (localhost only), so there's no login. It runs in the
-foreground — leave it up. Then, from another shell:
+`pixi run start` disables auth (localhost only), so there's no login. It runs in
+the foreground — leave it up. Then, from another shell:
 
 ```bash
-just release jupyter-ai-acp-client 0.2.1     # package + explicit version
+pixi run release jupyter-ai-acp-client 0.2.1  # package + explicit version
 ```
 
 or trigger `cf_release` from the UI with a conf like
 `{ "package": "jupyter-ai-acp-client", "version": "0.2.1" }`.
 
+Other tasks: `pixi run test` (unit tests), `pixi run reset` (wipe the local
+Airflow home).
+
 The version is **explicit** (the package must already be published to PyPI at
 that version). The DAG then, in order:
 
-1. **prepare** — clone + fork the feedstock, compute the run-requirement diff,
+1. **Prepare** — clone + fork the feedstock, compute the run-requirement diff,
    verify each dep exists on conda-forge.
-2. **update_recipe** — worktree in `/tmp`, apply the diff + bump version/sha256,
-   commit + push to your fork, open the PR (titled exactly `<pkg> v<version>`),
-   then `conda smithy rerender` and push the rerender commit.
-3. **wait_for_ci** and **approval** — run in parallel; CI must go green *and* you
-   must approve in the UI.
-4. **merge** — squash-merge as `<pkg> v<version> (#N)`.
-5. **await_conda_forge** — poll (`conda search`, every 60s) until the version is
-   downloadable.
+2. **Update feedstock** — worktree in `/tmp`, apply the diff + bump version/sha256,
+   `conda smithy rerender`, and make a single commit (all local).
+3. **Open feedstock PR** — push the finished branch, open the PR (titled exactly
+   `<pkg> v<version>`).
+4. **Await green CI** and **Await human approval** — run in parallel; CI must go
+   green *and* you must approve in the UI.
+5. **Publish on Conda Forge** — squash-merge as `<pkg> v<version> (#N)`, then poll
+   (`conda search`, every 60s) until the version is downloadable.
 6. **cleanup** — remove the `/tmp` worktree (always runs).
 
 At the `approval` task the run enters `awaiting_input`; open it in the UI and
