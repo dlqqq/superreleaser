@@ -24,8 +24,7 @@ def publish(pr_url):
         task_id="merge",
         task_display_name="Merge PR",
         bash_command="merge.sh",
-        env={**ENV, "PR_URL": pr_url,
-             "WORKTREE": "/tmp/{{ params.package }}-feedstock-{{ params.version }}"},
+        env={**ENV, "PR_URL": pr_url},
         **BASE,
         doc_md="Squash-merge the feedstock PR with commit subject "
         "`<pkg> v<version> (#N)`.",

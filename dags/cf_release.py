@@ -16,7 +16,7 @@ Flow:
            ├─ wait_for_ci ─┐   (green CI AND human approval run in parallel;
            └─ approval ────┤    CI runs once, on the final head)
   publish        merge as "<pkg> v<version> (#N)" → poll until downloadable
-  cleanup        remove the /tmp worktree (always runs)
+  cleanup        delete the /tmp worktree + close the PR if still open (always)
 
 Each task group lives in its own module under cf_tasks/; the single-use tasks
 (CI wait, approval, merge, availability wait, cleanup) are defined inline here.
@@ -36,7 +36,6 @@ import pendulum
 
 from airflow.sdk import dag, task
 from airflow.sdk.exceptions import AirflowFailException
-from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.hitl import ApprovalOperator
 from airflow.providers.standard.sensors.python import PythonSensor
 
@@ -47,8 +46,9 @@ from cf_tasks import (
     update_recipe as update_mod,
     open_pr as open_pr_mod,
     publish as publish_mod,
+    cleanup as cleanup_mod,
 )
-from cf_tasks._common import BASE, ENV, SCRIPTS
+from cf_tasks._common import SCRIPTS
 from superreleaser import gitops
 
 log = logging.getLogger("superreleaser.dag")
@@ -130,21 +130,15 @@ def cf_release():
     # after both gates pass.
     pub = publish_mod.publish(pr_url)
 
-    cleanup = BashOperator(
-        task_id="cleanup",
-        task_display_name="Clean up worktree",
-        bash_command="cleanup.sh",
-        env=ENV,
-        **BASE,
-        trigger_rule="all_done",
-        doc_md="Remove the /tmp release worktree (best-effort, always runs).",
-    )
+    # cleanup: delete the worktree + close the PR if still open. Runs at the very
+    # end regardless of outcome (its tasks are trigger_rule="all_done"); wiring it
+    # after the worktree creator + the final publish step fires it on success or
+    # partial failure alike.
+    clean = cleanup_mod.cleanup()
 
     [wait_ci, approval] >> pub["merge"]
-    # cleanup runs at the very end regardless of outcome (trigger_rule=all_done);
-    # depending on the worktree creator + the final step fires it on success or
-    # partial failure alike.
-    [upd["create_worktree"], pub["await_conda_forge"]] >> cleanup
+    [upd["create_worktree"], pub["await_conda_forge"]] >> clean["delete_worktree"]
+    [upd["create_worktree"], pub["await_conda_forge"]] >> clean["close_pr"]
 
 
 cf_release()

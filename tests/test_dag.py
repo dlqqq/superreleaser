@@ -33,7 +33,8 @@ def test_expected_tasks_present(cf_dag):
         "update_recipe.rerender", "update_recipe.commit",
         "open_pr.push_branch", "open_pr.open",
         "wait_for_ci", "approval",
-        "publish.merge", "publish.await_conda_forge", "cleanup",
+        "publish.merge", "publish.await_conda_forge",
+        "cleanup.delete_worktree", "cleanup.close_pr",
     ]:
         assert expected in ids, f"missing task {expected}"
 
@@ -44,7 +45,8 @@ def test_merge_waits_for_ci_and_approval(cf_dag):
 
 
 def test_cleanup_runs_regardless(cf_dag):
-    assert cf_dag.get_task("cleanup").trigger_rule == "all_done"
+    for t in ("cleanup.delete_worktree", "cleanup.close_pr"):
+        assert cf_dag.get_task(t).trigger_rule == "all_done"
 
 
 def test_all_bash_scripts_exist(cf_dag):

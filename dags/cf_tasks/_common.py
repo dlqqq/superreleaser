@@ -22,10 +22,14 @@ SCRIPTS = str(Path(__file__).resolve().parent / "scripts")
 
 # Common env passed to the bash step scripts. append_env=True MERGES onto the
 # inherited environment (keeps SSH_AUTH_SOCK, PATH, HOME) rather than replacing.
+# RUN_KEY is the DAG run_id sanitized for use in a filesystem path — every task
+# that touches the /tmp worktree builds it from RUN_KEY so they all agree and
+# runs never collide (unique per run, unlike a package+version path).
 ENV = {
     "PACKAGE": "{{ params.package }}",
     "VERSION": "{{ params.version }}",
     "FEEDSTOCKS_ROOT": str(config.FEEDSTOCKS_ROOT),
+    "RUN_KEY": "{{ run_id | replace(':','-') | replace('+','-') | replace('.','-') }}",
 }
 BASE = dict(append_env=True)
 
