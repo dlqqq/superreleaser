@@ -1,105 +1,242 @@
-"""Prepare phase: get the feedstock, choose the version, update + verify the recipe."""
+"""The `prepare` task group for a conda-forge release.
+
+Given a `package` and an explicit `version` (from the DAG run params), this group
+gets the feedstock ready and works out what the recipe change should be — without
+touching anything remote-destructive (no PR, no push of a release branch), so no
+dry-run flag is needed here.
+
+Steps (each a small BashOperator; `output_processor` parses stdout into XCom):
+
+  1. clone_feedstock   — clone conda-forge/<pkg>-feedstock locally (idempotent)
+  2. ensure_fork       — make sure a `fork` remote exists (CF PRs come from a fork)
+  3. check_version     — fail unless the feedstock's current version < proposed
+  4. pypi_requirements — fetch the released sdist's runtime deps from PyPI
+  5. dependency_diff   — {dep: {old, new}} of run-requirement ranges
+  6. verify_conda      — every mapped dep exists on the conda-forge channel
+
+The group owns its own internal XCom wiring; the DAG only needs to instantiate it.
+
+Design notes:
+- BashOperator does the I/O (git/gh/curl) so we get its automatic command logging;
+  the `output_processor` functions parse stdout and reuse the tested logic in
+  `superreleaser.condaforge` / `.recipe` (name resolution, spec sorting) rather
+  than reimplementing the subtle hyphen/underscore rules in jq.
+- Bodies are tiny and pure, so they're unit-testable without Airflow.
+"""
 
 from __future__ import annotations
 
-from airflow.sdk import task
-from airflow.exceptions import AirflowFailException, AirflowSkipException
+import json
+import sys
+from pathlib import Path
 
-from superreleaser import condaforge, config, gitops, recipe as rcp
+from airflow.sdk import task_group
+from airflow.sdk.exceptions import AirflowFailException
+from airflow.providers.standard.operators.bash import BashOperator
 
-from ._common import conf, log
+# Make the `superreleaser` package (repo root) importable.
+_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
+from superreleaser import condaforge, config, recipe as rcp  # noqa: E402
 
-@task(task_display_name="Checkout feedstock")
-def checkout(**context) -> dict:
-    """Sync the `<package>-feedstock` submodule to its remote default branch so
-    we branch off current state. Fails if the feedstock isn't checked out
-    locally."""
-    package = conf(context, "package") or context["params"]["package"]
-    dry_run = bool(conf(context, "dry_run", context["params"]["dry_run"])
-                   or config.DRY_RUN_DEFAULT)
-    fs = config.feedstock_dir(package)
-    if not fs.exists():
-        raise AirflowFailException(f"feedstock not found: {fs}")
-    gitops._run(["git", "fetch", "origin"], cwd=fs, check=False)
-    head = gitops._run(
-        ["git", "symbolic-ref", "refs/remotes/origin/HEAD"], cwd=fs, check=False
-    ) or "refs/remotes/origin/main"
-    default_branch = head.rsplit("/", 1)[-1]
-    if not dry_run:
-        gitops._run(["git", "checkout", default_branch], cwd=fs, check=False)
-        gitops._run(["git", "reset", "--hard", f"origin/{default_branch}"], cwd=fs, check=False)
-    log.info("feedstock %s on %s (dry_run=%s)", package, default_branch, dry_run)
-    return {"package": package, "dry_run": dry_run, "default_branch": default_branch}
+_FEEDSTOCKS = str(config.FEEDSTOCKS_ROOT)
 
 
-@task(task_display_name="Identify version")
-def pick_version(ctx: dict, **context) -> dict:
-    """Pick the **earliest stable** PyPI version missing from the feedstock (one
-    bump per PR, conda-forge convention; prereleases skipped). Skips the run if
-    the feedstock is already current. Override with the `version` trigger param."""
-    package = ctx["package"]
-    recipe_text = config.recipe_path(package).read_text()
-    pypi_project = rcp.pypi_name(recipe_text)
-    cur = rcp.current_version(recipe_text)
-    forced = conf(context, "version") or context["params"]["version"]
-    target = forced or rcp.earliest_missing_stable(pypi_project, cur)
-    if not target:
-        raise AirflowSkipException(
-            f"{package}: feedstock at {cur} is already current on PyPI"
+# --------------------------------------------------------------------------- #
+# output_processor callables — parse a command's stdout into an XCom value.
+# --------------------------------------------------------------------------- #
+def _proc_current_version(output: str) -> str:
+    """Parse `context.version` out of the cloned recipe.yaml (printed by step 3's
+    command as the whole file)."""
+    return rcp.current_version(output)
+
+
+def _proc_pypi_requirements(output: str) -> list[dict]:
+    """`curl …/pypi/<pkg>/<ver>/json` stdout → list of {name, spec} runtime deps,
+    extras/markers dropped (reuses the tested parser)."""
+    data = json.loads(output)
+    out = []
+    for req in data["info"].get("requires_dist") or []:
+        if "extra ==" in req:
+            continue
+        import re
+        head = req.split(";")[0].strip()
+        m = re.match(r"^([A-Za-z0-9_.\-]+)\s*(.*)$", head)
+        if not m:
+            continue
+        out.append({"name": m.group(1),
+                    "spec": rcp._sort_spec(m.group(2).strip().strip("()").strip())})
+    return out
+
+
+@task_group(group_id="prepare")
+def prepare():
+    """Clone + fork the feedstock, validate the version bump, and compute the
+    recipe dependency change. Returns the task group so the DAG can chain it."""
+
+    # 1. Clone the feedstock locally (idempotent: skip if already present).
+    clone_feedstock = BashOperator(
+        task_id="clone_feedstock",
+        bash_command=(
+            'set -euo pipefail\n'
+            f'mkdir -p "{_FEEDSTOCKS}"\n'
+            'pkg="{{ params.package }}"\n'
+            f'dir="{_FEEDSTOCKS}/${{pkg}}-feedstock"\n'
+            'if [ -d "$dir/.git" ]; then\n'
+            '  echo "already cloned: $dir"; git -C "$dir" fetch origin --quiet\n'
+            'else\n'
+            '  gh repo clone "conda-forge/${pkg}-feedstock" "$dir"\n'
+            'fi\n'
+            'echo "$dir"'
+        ),
+        doc_md="Clone `conda-forge/<package>-feedstock` under the local "
+        "`feedstocks/` dir (idempotent — fetches if already present).",
+    )
+
+    # 2. Ensure a `fork` remote exists — conda-forge PRs are pushed from a fork.
+    ensure_fork = BashOperator(
+        task_id="ensure_fork",
+        bash_command=(
+            'set -euo pipefail\n'
+            'pkg="{{ params.package }}"\n'
+            f'cd "{_FEEDSTOCKS}/${{pkg}}-feedstock"\n'
+            'if git remote get-url fork >/dev/null 2>&1; then\n'
+            '  echo "fork remote already set"\n'
+            'else\n'
+            '  echo "Forking ${pkg}-feedstock..."\n'
+            '  gh repo fork --remote --remote-name fork\n'
+            '  gh repo set-default "$(git remote get-url origin | sed \'s|.*github.com[:/]||;s|\\.git$||\')"\n'
+            'fi'
+        ),
+        doc_md="Ensure a `fork` remote exists on the local feedstock clone "
+        "(conda-forge PRs must be published from a fork).",
+    )
+
+    # NOTE: a BashOperator's output_processor receives only the LAST line of
+    # stdout (SubprocessHook). So every task that feeds a processor emits ONE
+    # compact JSON line (via jq -c); processors then read any files they need
+    # (the recipe) directly, reusing the tested Python helpers.
+
+    # 3. Guard: the feedstock's current version must be < the proposed version.
+    check_version = BashOperator(
+        task_id="check_version",
+        bash_command=(
+            'set -euo pipefail\n'
+            'pkg="{{ params.package }}"\n'
+            f'recipe="{_FEEDSTOCKS}/${{pkg}}-feedstock/recipe/recipe.yaml"\n'
+            'jq -cn --arg proposed "{{ params.version }}" --arg recipe "$recipe" '
+            "'{proposed:$proposed, recipe:$recipe}'"
+        ),
+        output_processor=_guard_version,
+        doc_md="Read the feedstock's current recipe version and fail unless it "
+        "is **less than** the proposed `version` DAG param.",
+    )
+
+    # 4. Fetch the released package's declared runtime deps from PyPI. `jq -c`
+    #    guarantees a single compact line for the processor.
+    pypi_requirements = BashOperator(
+        task_id="pypi_requirements",
+        bash_command=(
+            'set -euo pipefail\n'
+            'curl -fsSL "https://pypi.org/pypi/{{ params.package }}/'
+            '{{ params.version }}/json" | jq -c .'
+        ),
+        output_processor=_proc_pypi_requirements,
+        doc_md="Fetch the released sdist's `requires_dist` from PyPI and parse "
+        "the runtime dependencies (extras/markers dropped).",
+    )
+
+    # 5. Compute the run-requirement diff {dep: {old, new}}. Emits one compact
+    #    line carrying the PyPI deps (from XCom) + the recipe path; the processor
+    #    reads the recipe and does the conda-name resolution + spec sorting.
+    dependency_diff = BashOperator(
+        task_id="dependency_diff",
+        bash_command=(
+            'set -euo pipefail\n'
+            'pkg="{{ params.package }}"\n'
+            f'recipe="{_FEEDSTOCKS}/${{pkg}}-feedstock/recipe/recipe.yaml"\n'
+            "jq -cn --argjson reqs '{{ ti.xcom_pull(task_ids=\"prepare.pypi_requirements\") | tojson }}' "
+            '--arg recipe "$recipe" '
+            "'{reqs:$reqs, recipe:$recipe}'"
+        ),
+        output_processor=_compute_diff,
+        doc_md="Diff `requirements.run`: `{dep: {old, new}}` mapping the old "
+        "recipe ranges to the ranges derived from the released package. New "
+        "deps get `old: null`; unresolvable conda names are flagged.",
+    )
+
+    # 6. Verify every mapped dependency exists on the conda-forge channel.
+    verify_conda = BashOperator(
+        task_id="verify_conda",
+        bash_command="echo '{{ ti.xcom_pull(task_ids=\"prepare.dependency_diff\") | tojson }}'",
+        output_processor=_verify_conda,
+        doc_md="For each dependency in the diff, confirm a matching conda-forge "
+        "package exists; fail listing any that don't (so a human resolves the "
+        "name before a PR is opened).",
+    )
+
+    clone_feedstock >> ensure_fork >> check_version >> pypi_requirements
+    pypi_requirements >> dependency_diff >> verify_conda
+
+
+# --------------------------------------------------------------------------- #
+# Helpers used by output_processors (kept module-level for unit testing).
+# --------------------------------------------------------------------------- #
+def _guard_version(output: str) -> str:
+    """output = compact JSON `{proposed, recipe}` (recipe = path to recipe.yaml).
+    Fail unless current recipe version < proposed; return the proposed version."""
+    from packaging.version import Version
+    payload = json.loads(output)
+    proposed = payload["proposed"].lstrip("v")
+    cur = rcp.current_version(Path(payload["recipe"]).read_text())
+    if not Version(cur) < Version(proposed):
+        raise AirflowFailException(
+            f"proposed version {proposed} is not greater than feedstock "
+            f"version {cur}"
         )
-    conda_name = rcp.conda_package_name(recipe_text)
-    log.info("%s: feedstock=%s -> target=%s (pypi=%s, conda=%s)",
-             package, cur, target, pypi_project, conda_name)
-    return {**ctx, "pypi_project": pypi_project, "current": cur,
-            "target": target, "conda_name": conda_name}
+    return proposed
 
 
-@task(task_display_name="Update recipe")
-def update_recipe(ctx: dict) -> dict:
-    """Set `context.version`, `source.sha256` (from the PyPI sdist), and rewrite
-    `requirements.run` from the released package's own metadata. conda-forge
-    names for **new** deps are probed against anaconda.org, never guessed;
-    unresolvable ones are tracked (not added) for the draft-PR + comment path.
-    Logs the full `git diff` of the recipe."""
-    package, target, pypi_project = ctx["package"], ctx["target"], ctx["pypi_project"]
-    recipe_file = config.recipe_path(package)
-    fs = config.feedstock_dir(package)
-    text = recipe_file.read_text()
+def _compute_diff(output: str) -> dict:
+    """output = compact JSON `{reqs, recipe}` where reqs is the PyPI-deps list
+    and recipe is the path to recipe.yaml.
 
-    sha = condaforge.sdist_sha256(pypi_project, target)
-    if not sha:
-        raise AirflowFailException(f"no sdist on PyPI for {pypi_project} {target}")
+    Returns {dep: {old, new, resolved}} of conda-forge run-requirement ranges:
+    old = the range currently in the recipe (None for a new dep); new = the
+    range from the released package's PyPI metadata, keyed by the resolved
+    conda-forge name.
+    """
+    payload = json.loads(output)
+    pypi_reqs = payload["reqs"]
+    existing = rcp.current_run_requirements(Path(payload["recipe"]).read_text())
+    existing_names = {rcp._entry_name(e) for e in existing}
+    old_by_conda = {
+        rcp._entry_name(e): " ".join(e.split()[1:]) for e in existing
+    }
 
-    existing = rcp.current_run_requirements(text)
-    mapping = rcp.map_dependencies(pypi_project, target, existing)
-    new_text = rcp.apply_update(text, target, sha, mapping["run"])
-
-    # Always write so we can show a real `git diff`; in dry-run we restore the
-    # file afterward so nothing is left changed on disk.
-    recipe_file.write_text(new_text)
-    diff = gitops.diff(fs, "recipe/recipe.yaml")
-    log.info("git diff recipe/recipe.yaml:\n%s", diff or "(no changes)")
-    if ctx["dry_run"]:
-        gitops._run(["git", "checkout", "--", "recipe/recipe.yaml"], cwd=fs, check=False)
-        log.info("[dry-run] reverted recipe on disk (diff shown above only)")
-
-    if mapping["unresolved"]:
-        log.warning("UNRESOLVED conda-forge deps (will draft + comment): %s",
-                    mapping["unresolved"])
-    return {**ctx, "sha256": sha, "diff": diff, **mapping}
+    diff: dict[str, dict] = {}
+    for req in pypi_reqs:
+        dep, spec = req["name"], req["spec"]
+        conda = rcp._pypi_to_conda_via_existing(dep, existing_names) \
+            or condaforge.resolve_conda_name(dep)
+        key = conda or dep
+        diff[key] = {
+            "old": old_by_conda.get(key),
+            "new": spec,
+            "resolved": conda is not None,
+        }
+    return diff
 
 
-@task(task_display_name="Verify recipe dependencies")
-def verify_cf(ctx: dict) -> dict:
-    """For every `requirements.run` entry: confirm the conda-forge package
-    **exists** AND the required **version range resolves** to at least one real
-    build. Does not hard-fail — entries that don't resolve are recorded as
-    `unsatisfied` and surfaced in the PR body and the approval gate, so a human
-    sees the gap."""
-    unsatisfied = rcp.verify_run(ctx["run"])
-    log.info("verify: %d run deps, %d unresolved names, %d unsatisfied ranges",
-             len(ctx["run"]), len(ctx["unresolved"]), len(unsatisfied))
-    for u in unsatisfied:
-        log.warning("no conda-forge build satisfies: %s", u)
-    return {**ctx, "unsatisfied": unsatisfied}
+def _verify_conda(diff_json: str) -> dict:
+    """Confirm each dependency name exists on conda-forge; fail listing misses."""
+    diff = json.loads(diff_json)
+    missing = [name for name, d in diff.items()
+               if not d.get("resolved") or condaforge.cf_package(name) is None]
+    if missing:
+        raise AirflowFailException(
+            "no conda-forge package found for: " + ", ".join(sorted(missing))
+        )
+    return diff

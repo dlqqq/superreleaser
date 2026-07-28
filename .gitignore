@@ -4,6 +4,9 @@
 # Airflow local home: SQLite db, logs, generated admin password
 .airflow/
 
+# Locally cloned conda-forge feedstocks (cloned on demand by the prepare phase)
+feedstocks/
+
 # Python
 __pycache__/
 *.pyc

@@ -1,1 +1,3 @@
 cf_tasks/
+cf_release.py
+cf_release_batch.py
