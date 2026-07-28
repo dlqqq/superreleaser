@@ -9,6 +9,8 @@ if git remote get-url fork >/dev/null 2>&1; then
   echo "fork remote already set"
 else
   echo "Forking ${PACKAGE}-feedstock..."
+  # Creates the fork under the authenticated user and adds the `fork` remote.
+  # (No `gh repo set-default` — every gh command below is fully explicit about
+  # its repo/base/head, so it doesn't depend on per-clone default state.)
   gh repo fork --remote --remote-name fork
-  gh repo set-default "$(git remote get-url origin | sed 's|.*github.com[:/]||;s|\.git$||')"
 fi
