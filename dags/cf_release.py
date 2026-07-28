@@ -16,7 +16,8 @@ Flow:
   approval       human approves/rejects in the UI (reject stops the run here)
   wait_for_ci    then poll the PR's checks to green (CI ran during review)
   publish        merge as "<pkg> v<version> (#N)" → poll until downloadable
-  cleanup        delete the /tmp worktree + close the PR if still open (always)
+  cleanup        (parallel, always) delete worktree, close PR if open, delete
+                 the fork's remote branch
 
 Each task group lives in its own module under cf_tasks/; the single-use tasks
 (CI wait, approval, merge, availability wait, cleanup) are defined inline here.
@@ -140,8 +141,12 @@ def cf_release():
     clean = cleanup_mod.cleanup()
 
     pr["open"] >> approval >> wait_ci >> pub["merge"]
-    [upd["create_worktree"], pub["await_conda_forge"]] >> clean["delete_worktree"]
-    [upd["create_worktree"], pub["await_conda_forge"]] >> clean["close_pr"]
+    # All cleanup steps hang off the same two anchors (worktree creator + final
+    # publish step) and run in parallel.
+    anchors = [upd["create_worktree"], pub["await_conda_forge"]]
+    anchors >> clean["delete_worktree"]
+    anchors >> clean["close_pr"]
+    anchors >> clean["delete_remote_branch"]
 
 
 cf_release()

@@ -1,11 +1,13 @@
 """The `cleanup` task group: tidy up after a release run, whatever the outcome.
 
 Wired with trigger_rule="all_done" upstream so it runs on success, failure, or a
-rejected gate. Two independent best-effort steps:
+rejected gate. Three independent best-effort steps (they run in parallel — no
+ordering between them):
 
-  1. delete_worktree — remove the /tmp release worktree
-  2. close_pr        — close the release PR if it's still open (a merged PR is
-                       not "open", so a successful release is untouched)
+  1. delete_worktree      — remove the /tmp release worktree + local branch
+  2. close_pr             — close the release PR if still open (a merged PR is
+                            not "open", so a successful release is untouched)
+  3. delete_remote_branch — delete the fork's remote release branch if it exists
 """
 
 from __future__ import annotations
@@ -39,4 +41,19 @@ def cleanup():
         doc_md="Close the release PR if it's still open (no-op once merged).",
     )
 
-    return {"delete_worktree": delete_worktree, "close_pr": close_pr}
+    delete_remote_branch = BashOperator(
+        task_id="delete_remote_branch",
+        task_display_name="Delete fork branch",
+        bash_command="delete_remote_branch.sh",
+        env=ENV,
+        **BASE,
+        trigger_rule="all_done",
+        doc_md="Delete the fork's remote release branch if it exists.",
+    )
+
+    # No dependencies between them → all three run in parallel.
+    return {
+        "delete_worktree": delete_worktree,
+        "close_pr": close_pr,
+        "delete_remote_branch": delete_remote_branch,
+    }
