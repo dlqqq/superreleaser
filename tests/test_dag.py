@@ -39,9 +39,11 @@ def test_expected_tasks_present(cf_dag):
         assert expected in ids, f"missing task {expected}"
 
 
-def test_merge_waits_for_ci_and_approval(cf_dag):
-    up = cf_dag.get_task("publish.merge").upstream_task_ids
-    assert "wait_for_ci" in up and "approval" in up
+def test_merge_waits_for_ci(cf_dag):
+    # Sequential: approval → wait_for_ci → merge. merge's direct upstream is CI;
+    # approval precedes CI (a reject stops the run before CI polls).
+    assert "wait_for_ci" in cf_dag.get_task("publish.merge").upstream_task_ids
+    assert "approval" in cf_dag.get_task("wait_for_ci").upstream_task_ids
 
 
 def test_cleanup_runs_regardless(cf_dag):

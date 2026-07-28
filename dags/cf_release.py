@@ -13,8 +13,8 @@ Flow:
   update_recipe  worktree in /tmp → write recipe → rerender → single commit
            │     (all local — branch fully built before it's pushed)
   open_pr        push the finished branch → open PR titled "<pkg> v<version>"
-           ├─ wait_for_ci ─┐   (green CI AND human approval run in parallel;
-           └─ approval ────┤    CI runs once, on the final head)
+  approval       human approves/rejects in the UI (reject stops the run here)
+  wait_for_ci    then poll the PR's checks to green (CI ran during review)
   publish        merge as "<pkg> v<version> (#N)" → poll until downloadable
   cleanup        delete the /tmp worktree + close the PR if still open (always)
 
@@ -106,7 +106,19 @@ def cf_release():
     upd["commit"] >> pr["push_branch"]
     pr_url = pr["pr_url"]
 
-    # CI wait and human approval run in PARALLEL; both must pass before merge.
+    # Human approval FIRST, then wait for CI — sequential, not parallel. A reject
+    # fails the run before the CI poller ever starts (no stray sensor left
+    # polling). This costs ~nothing: CI runs on GitHub the moment the PR opens,
+    # so it's usually green by the time approval clears; reviewing the diff
+    # doesn't depend on CI anyway.
+    approval = ApprovalOperator(
+        task_id="approval",
+        task_display_name="Await human approval",
+        subject="conda-forge release approval",
+        body=build_gate_body(pr_url, diff),
+        fail_on_reject=True,
+    )
+
     wait_ci = PythonSensor(
         task_id="wait_for_ci",
         task_display_name="Await green CI",
@@ -118,16 +130,7 @@ def cf_release():
         doc_md="Poll the PR's checks until green; fail the run if CI fails.",
     )
 
-    approval = ApprovalOperator(
-        task_id="approval",
-        task_display_name="Await human approval",
-        subject="conda-forge release approval",
-        body=build_gate_body(pr_url, diff),
-        fail_on_reject=True,
-    )
-
-    # publish: merge the approved PR + await conda-forge availability. Runs only
-    # after both gates pass.
+    # publish: merge the approved + CI-green PR, then await conda-forge availability.
     pub = publish_mod.publish(pr_url)
 
     # cleanup: delete the worktree + close the PR if still open. Runs at the very
@@ -136,7 +139,7 @@ def cf_release():
     # partial failure alike.
     clean = cleanup_mod.cleanup()
 
-    [wait_ci, approval] >> pub["merge"]
+    pr["open"] >> approval >> wait_ci >> pub["merge"]
     [upd["create_worktree"], pub["await_conda_forge"]] >> clean["delete_worktree"]
     [upd["create_worktree"], pub["await_conda_forge"]] >> clean["close_pr"]
 
