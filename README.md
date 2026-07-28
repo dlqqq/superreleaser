@@ -69,8 +69,14 @@ why its timeout means "abnormally slow propagation," never "maybe it's coming."
 ```
 superreleaser/
 ├── dags/
-│   ├── cf_release.py         # single-package release DAG (orchestration only)
-│   └── cf_release_batch.py   # batch DAG: release packages in dependency order
+│   ├── cf_release.py         # single-package release DAG — wiring only (~100 lines)
+│   ├── cf_release_batch.py   # batch DAG: release packages in dependency order
+│   ├── .airflowignore        # marks cf_tasks/ as library code, not DAGs
+│   └── cf_tasks/             # the task bodies, split by phase
+│       ├── prepare.py        # checkout, pick_version, update_recipe, verify_cf
+│       ├── publish.py        # open_pr, merge_pr, and the CI/CDN sensor callables
+│       ├── gate.py           # build the approval-gate message
+│       └── _common.py        # sys.path bootstrap + dag_run.conf helper
 ├── superreleaser/            # Airflow-independent logic (unit-testable)
 │   ├── config.py             # paths + DRY_RUN default
 │   ├── condaforge.py         # anaconda.org + PyPI probes, name resolution
@@ -80,6 +86,9 @@ superreleaser/
 ├── justfile                  # setup / start / release recipes
 └── pyproject.toml            # pinned deps (uv)
 ```
+
+Each `@task`'s **docstring** becomes its description in the Airflow UI, so the
+task modules read as normal Python with no inline `doc_md` clutter.
 
 ## Run it locally (single user, SQLite)
 
