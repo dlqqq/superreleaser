@@ -20,9 +20,12 @@ branch="release-${VERSION}"
 git -C "$clone" fetch origin --quiet
 default=$(git -C "$clone" symbolic-ref --short refs/remotes/origin/HEAD | sed 's|origin/||')
 
-# Clean up any previous attempt for this version.
+# Clean up any previous attempt for this version. `worktree prune` clears stale
+# registrations from earlier runs (whose /tmp dirs may be gone) so the branch is
+# no longer considered "checked out" and `branch -D` can actually delete it.
 git -C "$clone" worktree remove --force "$worktree" 2>/dev/null || true
 rm -rf "$parent"
+git -C "$clone" worktree prune 2>/dev/null || true
 git -C "$clone" branch -D "$branch" 2>/dev/null || true
 
 mkdir -p "$parent"
