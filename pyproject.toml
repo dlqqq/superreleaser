@@ -1,0 +1,28 @@
+[project]
+name = "superreleaser"
+version = "0.1.0"
+description = "Local, human-gated conda-forge release orchestrator for Jupyter AI, built on Apache Airflow 3"
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    # Airflow 3.1+ is required for the Human-in-the-Loop ApprovalOperator; the
+    # standard provider ships the HITL, TriggerDagRun, and Python sensors/operators.
+    "apache-airflow==3.3.0",
+    "apache-airflow-providers-standard==1.15.0",
+    # Version parsing/comparison for recipe version selection and range checks.
+    "packaging>=24.0",
+    # DAG start_date / scheduling (Airflow dependency, pinned for reproducibility).
+    "pendulum>=3.0,<4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.uv]
+# Airflow publishes wheels; no build isolation issues expected. Keep resolution
+# reproducible via the lockfile `uv lock` writes.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The DAGs import the local `superreleaser` package and add the repo root to
+# sys.path themselves; tests do the same, so no extra pythonpath config needed.
