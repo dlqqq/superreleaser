@@ -5,6 +5,10 @@ export AIRFLOW_HOME := root / ".airflow"
 export AIRFLOW__CORE__DAGS_FOLDER := root / "dags"
 # Localhost-only: disable auth so there's no password prompt/login.
 export AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS := "True"
+# Don't load Airflow's bundled example DAGs (keeps the UI to just our DAGs).
+# Must be set before the DB is first initialized; `just reset` clears a DB that
+# already loaded them.
+export AIRFLOW__CORE__LOAD_EXAMPLES := "False"
 
 alias list := list-recipes
 
@@ -22,6 +26,12 @@ setup:
 start:
     @echo "Airflow UI → http://localhost:8080 (auth disabled; localhost only)"
     uv run airflow standalone
+
+# Reset the local Airflow home (SQLite db, logs, config). Use this if example
+# DAGs were loaded before LOAD_EXAMPLES=False took effect. Recreated on next start.
+reset:
+    rm -rf "$AIRFLOW_HOME"
+    @echo "✓ Removed $AIRFLOW_HOME — next 'just start' reinitializes it clean."
 
 # Run the unit tests (no network; covers the recipe/version/plan logic).
 test:
