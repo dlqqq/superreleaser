@@ -69,10 +69,12 @@ release.
 ```
 superreleaser/
 ├── dags/
-│   ├── e2e_release.py        # full release DAG (GitHub → PyPI → cf_release)
-│   ├── cf_release.py         # conda-forge release DAG (wiring only)
+│   ├── e2e_release.py        # pypi_release() >> conda_forge_release()
+│   ├── cf_release.py         # conda_forge_release() only
 │   ├── .airflowignore        # marks cf_tasks/ as library code, not DAGs
 │   └── cf_tasks/             # task groups (one module each) + their scripts
+│       ├── pypi.py           # PyPI half: Step 1 → gate → Step 2 → await PyPI
+│       ├── conda_forge.py    # conda-forge half: wraps the phase groups below
 │       ├── prepare.py        # clone/fork, dep diff, verify on conda-forge
 │       ├── update_recipe.py  # worktree, write recipe, rerender, commit
 │       ├── open_pr.py        # push branch, open PR

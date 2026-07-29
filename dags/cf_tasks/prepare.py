@@ -69,9 +69,10 @@ def _proc_pypi_requirements(output: str) -> list[dict]:
 def prepare():
     """Clone + fork the feedstock and compute the recipe dependency change.
 
-    Returns (diff, verify_conda): the dependency-diff XComArg for downstream
-    consumption, and the verify_conda task so the DAG can order the next phase
-    AFTER conda-forge name verification passes."""
+    Returns (diff, verify_conda, clone_feedstock): the dependency-diff XComArg
+    for downstream consumption, the verify_conda task (so the caller can order
+    the next phase after dep verification), and clone_feedstock (the entry task,
+    so a caller can gate the whole conda-forge group's start)."""
 
     # 1. Clone the feedstock locally (idempotent: skip if already present).
     clone_feedstock = BashOperator(
@@ -121,7 +122,9 @@ def prepare():
     )
 
     clone_feedstock >> ensure_fork >> get_new_reqs >> diff >> verify_conda
-    return diff, verify_conda
+    # verify_conda (gates the next phase), the diff XComArg, and clone_feedstock
+    # (the entry task, so a caller can gate the whole conda-forge group's start).
+    return diff, verify_conda, clone_feedstock
 
 
 @task(task_id="compute_req_diff")

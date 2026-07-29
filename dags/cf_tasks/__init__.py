@@ -1,15 +1,16 @@
-"""Task groups for the `cf_release` DAG, one module per group.
+"""Task groups for the release DAGs, one module per group.
 
-The DAG (`dags/cf_release.py`) imports these and wires them together; each
-`@task` function's docstring becomes its `doc_md` in the Airflow UI.
+Two top-level composable groups the DAGs assemble from:
 
-- `prepare`       — clone + fork the feedstock, compute the run-requirement diff,
-                    verify each dep exists on conda-forge
-- `update_recipe` — build the release branch locally (worktree → write recipe →
-                    rerender → single commit)
-- `open_pr`       — push the finished branch and open the PR
-- `_common`       — shared bootstrap + constants (SCRIPTS dir, bash env)
+- `pypi.pypi_release`         — GitHub Step 1/Step 2 → human gate → PyPI wait
+- `conda_forge.conda_forge_release` — the whole conda-forge release
 
-Single-use tasks (CI wait, approval, merge, availability wait, cleanup) are
-defined inline in the DAG rather than here.
+`conda_forge_release` in turn nests the phase groups (`prepare`,
+`update_recipe`, `open_pr`, `publish`, `cleanup`) — task groups are recursive.
+So `cf_release` is just `conda_forge_release()`, and `e2e_release` is
+`pypi_release() >> conda_forge_release()`.
+
+`_common` holds shared bootstrap + the bash ENV + the registry Jinja macro.
+Bash I/O lives in `scripts/*.sh` (shown in each task's rendered template);
+application logic (recipe edits, dep diff, gate messages) is Python.
 """
