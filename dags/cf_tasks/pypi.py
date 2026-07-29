@@ -8,7 +8,7 @@ and waits for the version to land on PyPI:
   approval               review the draft; reject → stop (and delete the draft)
   publish_release        gh "Step 2: Publish Release" → publishes to PyPI
   await_pypi             poll PyPI until the version is available
-  delete_rejected_draft  run_if the approval was rejected: delete the draft
+  delete_rejected_draft  run_if a draft is still unpublished: delete it (else skip)
 
 The rejected-draft cleanup is gated with @task.run_if (a declarative condition)
 rather than an always-run task that branches internally.
@@ -56,11 +56,26 @@ def build_release_gate(release_url: str, **context) -> str:
     ])
 
 
-def _approval_rejected(context) -> bool:
-    """run_if condition: did the human reject the release at the approval gate?
-    True when the `approval` task ended in a failed state (fail_on_reject)."""
-    ti = context["dag_run"].get_task_instance("pypi_release.approval")
-    return ti is not None and str(ti.state) == "failed"
+def _draft_still_unpublished(context) -> bool:
+    """run_if condition: is there still an unpublished draft to clean up?
+
+    Ground truth via `gh`, not Airflow task state (the Task-SDK runtime context
+    has no usable get_task_instance): pull the draft URL from prep_release's
+    XCom, then check the release's isDraft. If the human approved, Step 2
+    published it (isDraft=false) → False → the task SKIPS. If they rejected (or
+    prep failed with no URL), the draft is still a draft → True → clean it up."""
+    release_url = context["ti"].xcom_pull(task_ids="pypi_release.prep_release")
+    if not release_url:
+        return False  # prep never produced a draft → nothing to delete
+    package = context["params"]["package"]
+    repo = registry.get(package).repo
+    tag = release_url.rsplit("/releases/tag/", 1)[-1]
+    out = subprocess.run(
+        ["gh", "release", "view", tag, "--repo", repo, "--json", "isDraft",
+         "--jq", ".isDraft"],
+        capture_output=True, text=True,
+    ).stdout.strip()
+    return out == "true"
 
 
 @task_group(group_id="pypi_release", group_display_name="Release on PyPI")
@@ -111,9 +126,10 @@ def pypi_release():
         doc_md="Poll PyPI until the released version's metadata is available.",
     )
 
-    # Conditional cleanup: only runs if the human rejected the draft. @task.run_if
-    # is the native declarative gate — no hardcoded branch inside the task.
-    @task.run_if(_approval_rejected)
+    # Conditional cleanup: only runs if an unpublished draft still exists (i.e.
+    # rejected/abandoned). @task.run_if is the native declarative gate — the task
+    # SKIPS on approval, no hardcoded branch inside it.
+    @task.run_if(_draft_still_unpublished)
     @task.bash(
         task_id="delete_rejected_draft",
         task_display_name="Delete rejected draft release",
