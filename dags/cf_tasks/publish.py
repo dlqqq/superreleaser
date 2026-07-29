@@ -40,7 +40,7 @@ def publish(pr_url):
         task_id="await_conda_forge",
         task_display_name="Await conda-forge availability",
         bash_command="conda search -c conda-forge "
-        "'{{ params.package }}=={{ params.version }}' >/dev/null 2>&1",
+        "'{{ pkg(params.package).cf_pkg_name }}=={{ params.version }}' >/dev/null 2>&1",
         poke_interval=60,
         mode="reschedule",
         timeout=60 * 60 * 2,

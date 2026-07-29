@@ -2,12 +2,12 @@
 # Remove the /tmp release worktree AND delete the local release branch, so a
 # re-run's `git worktree add -b release-<version>` doesn't collide with a
 # leftover branch. Runs at the end of a release regardless of outcome.
-# Inputs (env): PACKAGE, VERSION, FEEDSTOCKS_ROOT, RUN_KEY
+# Inputs (env): FEEDSTOCK_NAME, VERSION, FEEDSTOCKS_ROOT, RUN_KEY
 set -euo pipefail
 
-clone="$FEEDSTOCKS_ROOT/${PACKAGE}-feedstock"
+clone="$FEEDSTOCKS_ROOT/${FEEDSTOCK_NAME}"
 parent="/tmp/superreleaser-${RUN_KEY}"
-worktree="${parent}/${PACKAGE}-feedstock"
+worktree="${parent}/${FEEDSTOCK_NAME}"
 branch="release-${VERSION}"
 
 # 1. Remove the worktree and drop its registration (prune clears any stale

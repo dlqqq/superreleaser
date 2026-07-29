@@ -2,19 +2,18 @@
 # Create a fresh git worktree under /tmp for the release branch, off the local
 # feedstock clone's default branch. Idempotent: removes a stale worktree/branch
 # for this version first. Prints the worktree path as the last line (for XCom).
-# Inputs (env): PACKAGE, VERSION, FEEDSTOCKS_ROOT
+# Inputs (env): FEEDSTOCK_NAME, VERSION, FEEDSTOCKS_ROOT, RUN_KEY
 #
-# The worktree leaf dir MUST be exactly "<pkg>-feedstock": conda-smithy rerender
-# derives the feedstock repo name from the directory basename, so a dir like
-# "<pkg>-feedstock-<version>" would rewrite README links to a bogus
-# "<pkg>-feedstock-<version>-feedstock" repo. So nest under a run-scoped parent:
-# /tmp/superreleaser-<run-key>/<pkg>-feedstock
-# Inputs (env) also include RUN_KEY (the sanitized DAG run_id).
+# The worktree leaf dir MUST be exactly the feedstock repo name: conda-smithy
+# rerender derives the feedstock repo name from the directory basename, so a dir
+# like "<feedstock>-<version>" would rewrite README links to a bogus
+# "<feedstock>-<version>-feedstock" repo. So nest under a run-scoped parent:
+# /tmp/superreleaser-<run-key>/<feedstock-name>
 set -euo pipefail
 
-clone="$FEEDSTOCKS_ROOT/${PACKAGE}-feedstock"
+clone="$FEEDSTOCKS_ROOT/${FEEDSTOCK_NAME}"
 parent="/tmp/superreleaser-${RUN_KEY}"
-worktree="${parent}/${PACKAGE}-feedstock"
+worktree="${parent}/${FEEDSTOCK_NAME}"
 branch="release-${VERSION}"
 
 git -C "$clone" fetch origin --quiet

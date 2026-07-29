@@ -55,7 +55,16 @@ reset = "rm -rf $AIRFLOW_HOME"
 # version, e.g. `pixi run release jupyter-ai-acp-client 0.2.1`. Opens a real PR
 # and merges after CI-green + your approval in the UI — so `pixi run start`
 # first and drive the gate there.
-release = { cmd = "airflow dags trigger cf_release --conf '{\"package\":\"{{ package }}\",\"version\":\"{{ version }}\"}'", args = [
+# Full end-to-end release: GitHub prep → human approval → publish → PyPI → then
+# hands off to conda-forge. This is the usual entry point.
+release = { cmd = "airflow dags trigger e2e_release --conf '{\"package\":\"{{ package }}\",\"version\":\"{{ version }}\"}'", args = [
+    "package",
+    "version",
+] }
+
+# conda-forge release only (assumes the version is already on PyPI). The second
+# half of the e2e flow, runnable on its own.
+cf-release = { cmd = "airflow dags trigger cf_release --conf '{\"package\":\"{{ package }}\",\"version\":\"{{ version }}\"}'", args = [
     "package",
     "version",
 ] }

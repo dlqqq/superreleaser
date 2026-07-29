@@ -17,11 +17,21 @@ os.environ["AIRFLOW__CORE__LOAD_EXAMPLES"] = "False"
 
 
 @pytest.fixture(scope="module")
-def cf_dag():
+def dagbag():
     from airflow.models.dagbag import DagBag
     db = DagBag(dag_folder=str(_REPO / "dags"))
     assert not db.import_errors, db.import_errors
-    return db.dags["cf_release"]
+    return db
+
+
+@pytest.fixture(scope="module")
+def cf_dag(dagbag):
+    return dagbag.dags["cf_release"]
+
+
+@pytest.fixture(scope="module")
+def e2e_dag(dagbag):
+    return dagbag.dags["e2e_release"]
 
 
 def test_expected_tasks_present(cf_dag):
@@ -51,10 +61,42 @@ def test_cleanup_runs_regardless(cf_dag):
         assert cf_dag.get_task(t).trigger_rule == "all_done"
 
 
-def test_all_bash_scripts_exist(cf_dag):
+def test_all_bash_scripts_exist(cf_dag, e2e_dag):
     from cf_tasks._common import SCRIPTS
     scripts = Path(SCRIPTS)
-    for t in cf_dag.tasks:
-        cmd = getattr(t, "bash_command", "")
-        if cmd.endswith(".sh"):
-            assert (scripts / cmd).is_file(), f"{t.task_id} → missing {cmd}"
+    for dag in (cf_dag, e2e_dag):
+        for t in dag.tasks:
+            cmd = getattr(t, "bash_command", "")
+            if cmd.endswith(".sh"):
+                assert (scripts / cmd).is_file(), f"{t.task_id} → missing {cmd}"
+
+
+def test_e2e_expected_tasks(e2e_dag):
+    ids = {t.task_id for t in e2e_dag.tasks}
+    for expected in [
+        "prep_release", "build_release_gate", "approval", "publish_release",
+        "await_pypi", "trigger_cf_release", "cleanup_draft",
+    ]:
+        assert expected in ids, f"missing task {expected}"
+
+
+def test_e2e_publish_gated_by_approval(e2e_dag):
+    # Nothing publishes to PyPI before the human approves.
+    assert "approval" in e2e_dag.get_task("publish_release").upstream_task_ids
+
+
+def test_e2e_hands_off_to_cf_release(e2e_dag):
+    trig = e2e_dag.get_task("trigger_cf_release")
+    assert trig.trigger_dag_id == "cf_release"
+    assert "await_pypi" in trig.upstream_task_ids
+
+
+def test_e2e_cleanup_runs_regardless(e2e_dag):
+    assert e2e_dag.get_task("cleanup_draft").trigger_rule == "all_done"
+
+
+def test_package_param_is_registry_enum(cf_dag, e2e_dag):
+    from superreleaser.registry import PACKAGE_NAMES
+    for dag in (cf_dag, e2e_dag):
+        enum = dag.params.get_param("package").schema.get("enum")
+        assert enum == PACKAGE_NAMES

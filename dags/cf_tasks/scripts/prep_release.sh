@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Run "Step 1: Prep Release" on the source repo and watch it to completion, then
+# emit the draft-release URL as the last line (for XCom). Jupyter Releaser's
+# prep-release action prints `Setting output release_url=...` in the run log;
+# that's the stable place to read the draft URL from.
+# Inputs (env): REPO, VERSION
+set -euo pipefail
+
+# Kick off Step 1 (version_spec = the explicit version we're releasing).
+gh workflow run "Step 1: Prep Release" --repo "$REPO" \
+  -f version_spec="$VERSION" >&2
+
+# The run doesn't appear instantly; wait for the newest prep-release run to show
+# up, then watch it to completion (fail the task if it fails).
+sleep 5
+run_id="$(gh run list --repo "$REPO" --workflow "Step 1: Prep Release" \
+          --limit 1 --json databaseId --jq '.[0].databaseId')"
+gh run watch "$run_id" --repo "$REPO" --exit-status >&2
+
+# Extract the draft release URL the prep action set as an output.
+url="$(gh run view "$run_id" --repo "$REPO" --log 2>/dev/null \
+        | grep -oE 'release_url=https://[^ ]+/releases/tag/[^ ]+' \
+        | head -1 | sed 's/release_url=//')"
+if [ -z "$url" ]; then
+  echo "ERROR: could not find draft release URL in run $run_id" >&2
+  exit 1
+fi
+echo "$url"

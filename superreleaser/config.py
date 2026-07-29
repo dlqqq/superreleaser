@@ -18,20 +18,12 @@ FEEDSTOCKS_ROOT = Path(
 )
 
 
-def feedstock_repo(package: str) -> str:
-    """The conda-forge feedstock GitHub repo for a package (org/name)."""
-    return f"conda-forge/{package}-feedstock"
-
-# Default guardrail. Real by default per the decided model ("Real PR, no
-# merge"): edit the recipe, push a branch, open a real feedstock PR + comment,
-# but NEVER auto-merge. Flip to dry-run to exercise the DAG shape without
-# pushing anything (branch/push/PR/comment are printed instead).
-DRY_RUN_DEFAULT = os.environ.get("SUPERRELEASER_DRY_RUN", "0") != "0"
+def feedstock_dir(feedstock_name: str) -> Path:
+    """Local clone dir for a feedstock, keyed by its repo name (e.g.
+    `jupyter-ai-acp-client-feedstock`). Feedstock names aren't derivable from the
+    package name (see the registry), so callers pass the resolved name."""
+    return FEEDSTOCKS_ROOT / feedstock_name
 
 
-def feedstock_dir(package: str) -> Path:
-    return FEEDSTOCKS_ROOT / f"{package}-feedstock"
-
-
-def recipe_path(package: str) -> Path:
-    return feedstock_dir(package) / "recipe" / "recipe.yaml"
+def recipe_path(feedstock_name: str) -> Path:
+    return feedstock_dir(feedstock_name) / "recipe" / "recipe.yaml"

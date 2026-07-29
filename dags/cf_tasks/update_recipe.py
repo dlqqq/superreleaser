@@ -24,7 +24,7 @@ from airflow.sdk import task, task_group
 from airflow.providers.standard.operators.bash import BashOperator
 
 from ._common import BASE, ENV
-from superreleaser import condaforge, recipe as rcp
+from superreleaser import condaforge, recipe as rcp, registry
 
 
 @task(task_id="write_recipe")
@@ -33,12 +33,13 @@ def write_recipe(worktree: str, diff: dict, **context) -> str:
     Returns the worktree path (passthrough, so downstream bash can depend on it)."""
     package = context["params"]["package"]
     version = context["params"]["version"].lstrip("v")
+    pypi_name = registry.get(package).pypi_name
     recipe_file = Path(worktree) / "recipe" / "recipe.yaml"
     text = recipe_file.read_text()
 
-    sha = condaforge.sdist_sha256(package, version)
+    sha = condaforge.sdist_sha256(pypi_name, version)
     if not sha:
-        raise RuntimeError(f"no sdist on PyPI for {package} {version}")
+        raise RuntimeError(f"no sdist on PyPI for {pypi_name} {version}")
 
     existing = rcp.current_run_requirements(text)
     new_run = rcp.apply_req_diff(existing, diff)

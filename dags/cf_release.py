@@ -34,7 +34,7 @@ from pathlib import Path
 
 import pendulum
 
-from airflow.sdk import dag, task
+from airflow.sdk import dag, task, Param
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.hitl import ApprovalOperator
 
@@ -47,7 +47,8 @@ from cf_tasks import (
     publish as publish_mod,
     cleanup as cleanup_mod,
 )
-from cf_tasks._common import BASE, ENV, SCRIPTS
+from cf_tasks._common import BASE, ENV, MACROS, SCRIPTS
+from superreleaser.registry import PACKAGE_NAMES
 
 
 @task(task_id="build_gate_body", task_display_name="Build approval message")
@@ -74,8 +75,13 @@ def build_gate_body(pr_url: str, diff: dict, **context) -> str:
     start_date=pendulum.datetime(2026, 1, 1, tz="UTC"),
     catchup=False,
     tags=["superreleaser", "conda-forge"],
-    params={"package": "jupyter-ai-acp-client", "version": ""},
+    params={
+        # Dropdown of known packages (registry keys); version is explicit.
+        "package": Param("jupyter-ai-acp-client", type="string", enum=PACKAGE_NAMES),
+        "version": Param("", type="string"),
+    },
     template_searchpath=[SCRIPTS],
+    user_defined_macros=MACROS,  # exposes pkg(name) → registry entry in Jinja
 )
 def cf_release():
     # prepare: clone/fork + diff + verify dep names on conda-forge.

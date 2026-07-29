@@ -36,7 +36,7 @@ from airflow.sdk import task, task_group
 from airflow.providers.standard.operators.bash import BashOperator
 
 from ._common import BASE, ENV
-from superreleaser import condaforge, config, recipe as rcp
+from superreleaser import condaforge, config, recipe as rcp, registry
 
 
 # --------------------------------------------------------------------------- #
@@ -136,7 +136,8 @@ def compute_req_diff(pypi_reqs: list[dict], **context) -> dict:
     no conda-forge name could be found (flagged downstream, never guessed).
     """
     package = context["params"]["package"]
-    recipe_text = config.recipe_path(package).read_text()
+    feedstock_name = registry.get(package).feedstock_repo.split("/")[1]
+    recipe_text = config.recipe_path(feedstock_name).read_text()
     existing = rcp.current_run_requirements(recipe_text)
     existing_names = {rcp._entry_name(e) for e in existing}
     old_by_conda = {rcp._entry_name(e): " ".join(e.split()[1:]) for e in existing}
