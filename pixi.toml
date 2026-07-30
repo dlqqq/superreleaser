@@ -68,3 +68,16 @@ cf-release = { cmd = "airflow dags trigger cf_release --conf '{\"package\":\"{{ 
     "package",
     "version",
 ] }
+
+# Release a whole wave of subpackages in parallel, then jupyter-ai itself, in one
+# run. `subpackages` is a JSON array — pass it quoted, e.g.
+#   pixi run jai-release 3.2.0 \
+#     '[{"package":"jupyter-ai-router","version":"0.0.6"},
+#       {"package":"jupyter-ai-litellm","version":"0.0.3","range":">=0.0.3,<0.1.0"}]'
+# Omit a `range` (or use "auto") to raise the floor and keep the existing ceiling.
+# Every subpackage gets its own two gates, plus gates for the range bump, the
+# release notes, and jupyter-ai's own draft — so `pixi run start` first.
+jai-release = { cmd = "airflow dags trigger simple_jai_release --conf '{\"jupyter_ai_version\":\"{{ version }}\",\"subpackages\":{{ subpackages }}}'", args = [
+    "version",
+    "subpackages",
+] }

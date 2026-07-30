@@ -10,43 +10,58 @@ upstream of this group). This is where the release actually ships.
 
 from __future__ import annotations
 
-from airflow.sdk import task_group
-from airflow.providers.standard.operators.bash import BashOperator
-from airflow.providers.standard.sensors.bash import BashSensor
+import subprocess
 
-from ._common import BASE, ENV
+from airflow.sdk import task, task_group
+from airflow.providers.standard.operators.bash import BashOperator
+
+from ._common import BASE, env_from
+
+
+# A @task.sensor (Python) rather than a BashSensor: BashSensor runs its
+# bash_command literally (no template_searchpath) and has no append_env, so
+# passing env= would REPLACE the environment and drop PATH (conda not found).
+# The old workaround — Jinja-templating `params.package` into the command —
+# can't work inside a mapped group, where the package comes from the mapped
+# item, not params. A Python sensor takes the value as a plain argument and
+# inherits the environment, so it works in both cases.
+@task.sensor(
+    task_id="await_conda_forge",
+    task_display_name="Await conda-forge availability",
+    poke_interval=60,
+    mode="reschedule",
+    timeout=60 * 60 * 2,
+)
+def await_conda_forge(cf_pkg_name: str, version: str) -> bool:
+    """Poke conda-forge until `<package>==<version>` is downloadable.
+
+    `conda search` exits 0 when the exact version is on the channel, non-zero
+    while it's still propagating.
+    """
+    spec = f"{cf_pkg_name}=={version}"
+    done = subprocess.run(
+        ["conda", "search", "-c", "conda-forge", spec],
+        capture_output=True, text=True,
+    ).returncode == 0
+    print(f"conda search -c conda-forge '{spec}' → "
+          f"{'available' if done else 'not yet available'}")
+    return done
 
 
 @task_group(group_id="publish", group_display_name="Publish on Conda Forge")
-def publish(pr_url):
+def publish(ident, pr_url):
     """Merge the approved PR and wait for it to appear on conda-forge."""
     merge = BashOperator(
         task_id="merge",
         task_display_name="Merge PR",
         bash_command="merge.sh",
-        env={**ENV, "PR_URL": pr_url},
+        env=env_from(ident, PR_URL=pr_url),
         **BASE,
         doc_md="Squash-merge the feedstock PR with commit subject "
         "`<pkg> v<version> (#N)`.",
     )
 
-    # BashSensor runs bash_command literally (no template_searchpath / .sh
-    # lookup, unlike BashOperator) and has no append_env — passing env= would
-    # REPLACE the environment and drop PATH (conda not found). So inherit the
-    # environment (no env=) and Jinja-template the params straight into the
-    # command (trusted DAG params, not arbitrary input). `conda search` exits 0
-    # when the exact version is on the channel, non-zero to keep polling.
-    await_conda_forge = BashSensor(
-        task_id="await_conda_forge",
-        task_display_name="Await conda-forge availability",
-        bash_command="conda search -c conda-forge "
-        "'{{ pkg(params.package).cf_pkg_name }}=={{ params.version }}' >/dev/null 2>&1",
-        poke_interval=60,
-        mode="reschedule",
-        timeout=60 * 60 * 2,
-        doc_md="Poll conda-forge (`conda search`) every 60s until "
-        "`<package>==<version>` is downloadable.",
-    )
+    awaited = await_conda_forge(ident["CF_PKG_NAME"], ident["VERSION"])
 
-    merge >> await_conda_forge
-    return {"merge": merge, "await_conda_forge": await_conda_forge}
+    merge >> awaited
+    return {"merge": merge, "await_conda_forge": awaited}

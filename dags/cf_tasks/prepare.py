@@ -1,6 +1,6 @@
 """The `prepare` task group for a conda-forge release.
 
-Given a `package` and an explicit `version` (from the DAG run params), this group
+Given an `ident` (from `identity`, resolving the package + version), this group
 gets the feedstock ready and works out what the recipe change should be — without
 touching anything remote-destructive (no PR, no push of a release branch), so no
 dry-run flag is needed here.
@@ -35,8 +35,8 @@ import re
 from airflow.sdk import task, task_group
 from airflow.providers.standard.operators.bash import BashOperator
 
-from ._common import BASE, ENV
-from superreleaser import condaforge, config, recipe as rcp, registry
+from ._common import BASE, env_from
+from superreleaser import condaforge, config, recipe as rcp
 
 
 # --------------------------------------------------------------------------- #
@@ -66,19 +66,20 @@ def _proc_pypi_requirements(output: str) -> list[dict]:
 # output_processor receives only the LAST stdout line, so the JSON-emitting
 # scripts print one compact line (jq -c).
 @task_group(group_id="prepare", group_display_name="Prepare")
-def prepare():
+def prepare(ident):
     """Clone + fork the feedstock and compute the recipe dependency change.
 
     Returns (diff, verify_conda, clone_feedstock): the dependency-diff XComArg
     for downstream consumption, the verify_conda task (so the caller can order
     the next phase after dep verification), and clone_feedstock (the entry task,
     so a caller can gate the whole conda-forge group's start)."""
+    env = env_from(ident)
 
     # 1. Clone the feedstock locally (idempotent: skip if already present).
     clone_feedstock = BashOperator(
         task_id="clone_feedstock",
         bash_command="clone_feedstock.sh",
-        env=ENV,
+        env=env,
         **BASE,
         doc_md="Clone `conda-forge/<package>-feedstock` under the local "
         "`feedstocks/` dir (idempotent — fetches if already present).",
@@ -88,7 +89,7 @@ def prepare():
     ensure_fork = BashOperator(
         task_id="ensure_fork",
         bash_command="ensure_fork.sh",
-        env=ENV,
+        env=env,
         **BASE,
         doc_md="Ensure a `fork` remote exists on the local feedstock clone "
         "(conda-forge PRs must be published from a fork).",
@@ -98,7 +99,7 @@ def prepare():
     get_new_reqs = BashOperator(
         task_id="get_new_reqs",
         bash_command="get_new_reqs.sh",
-        env=ENV,
+        env=env,
         **BASE,
         output_processor=_proc_pypi_requirements,
         doc_md="Fetch the released sdist's `requires_dist` from PyPI and parse "
@@ -108,13 +109,16 @@ def prepare():
     # 4. Compute the run-requirement diff. This is application-layer logic (YAML
     #    read + conda-name resolution + spec sorting), so it's a plain Python
     #    task rather than a shell script.
-    diff = compute_req_diff(get_new_reqs.output)
+    diff = compute_req_diff(get_new_reqs.output, ident)
 
     # 5. Verify every dependency in the diff exists on the conda-forge channel.
+    #    The diff is serialized by a task rather than ti.xcom_pull (whose
+    #    task_id would change with the group's nesting) or .map (which yields a
+    #    lazy _MapResult that a BashOperator env= can't consume).
     verify_conda = BashOperator(
         task_id="verify_conda",
         bash_command="verify_conda.sh",
-        env={"DIFF": '{{ ti.xcom_pull(task_ids="prepare.compute_req_diff") | tojson }}'},
+        env={"DIFF": diff_json(diff)},
         **BASE,
         doc_md="For each dependency in the diff, `conda search` conda-forge to "
         "confirm the package exists; fail listing any misses so a human resolves "
@@ -127,8 +131,14 @@ def prepare():
     return diff, verify_conda, clone_feedstock
 
 
+@task(task_id="diff_json", task_display_name="Serialize diff")
+def diff_json(diff: dict) -> str:
+    """The diff as a compact JSON string, for `verify_conda.sh`'s $DIFF."""
+    return json.dumps(diff)
+
+
 @task(task_id="compute_req_diff")
-def compute_req_diff(pypi_reqs: list[dict], **context) -> dict:
+def compute_req_diff(pypi_reqs: list[dict], ident: dict) -> dict:
     """Diff `requirements.run`: `{dep: {old, new, resolved}}`.
 
     Pure application-layer logic — reads the cloned recipe.yaml (PyYAML),
@@ -138,9 +148,7 @@ def compute_req_diff(pypi_reqs: list[dict], **context) -> dict:
     unchanged are omitted (a diff shows only changes). `resolved` is False when
     no conda-forge name could be found (flagged downstream, never guessed).
     """
-    package = context["params"]["package"]
-    feedstock_name = registry.get(package).feedstock_repo.split("/")[1]
-    recipe_text = config.recipe_path(feedstock_name).read_text()
+    recipe_text = config.recipe_path(ident["FEEDSTOCK_NAME"]).read_text()
     existing = rcp.current_run_requirements(recipe_text)
     existing_names = {rcp._entry_name(e) for e in existing}
     old_by_conda = {rcp._entry_name(e): " ".join(e.split()[1:]) for e in existing}

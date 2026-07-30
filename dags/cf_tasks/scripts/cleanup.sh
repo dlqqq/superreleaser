@@ -5,8 +5,11 @@
 # Inputs (env): FEEDSTOCK_NAME, VERSION, FEEDSTOCKS_ROOT, RUN_KEY
 set -euo pipefail
 
+# Per-PACKAGE parent (must match create_worktree.sh): N packages release in
+# parallel within one run, so removing a run-scoped parent would destroy
+# siblings' worktrees.
 clone="$FEEDSTOCKS_ROOT/${FEEDSTOCK_NAME}"
-parent="/tmp/superreleaser-${RUN_KEY}"
+parent="/tmp/superreleaser-${RUN_KEY}/${FEEDSTOCK_NAME}"
 worktree="${parent}/${FEEDSTOCK_NAME}"
 branch="release-${VERSION}"
 

@@ -14,22 +14,22 @@ from __future__ import annotations
 from airflow.sdk import task_group
 from airflow.providers.standard.operators.bash import BashOperator
 
-from ._common import BASE, ENV
+from ._common import BASE, env_from
 
 
 @task_group(group_id="open_pr", group_display_name="Open feedstock PR")
-def open_pr(worktree_path):
+def open_pr(ident, worktree_path):
     """Push the finished branch to the fork and open the PR. Returns a dict:
       - `pr_url` (XComArg) — the opened PR's URL;
       - `push_branch` (task) — the entry task, to gate behind the commit;
       - `open` (task) — the open-PR task, for downstream ordering.
     """
-    wt = {"WORKTREE": worktree_path}
+    env = env_from(ident, WORKTREE=worktree_path)
 
     push_branch = BashOperator(
         task_id="push_branch",
         bash_command="push_branch.sh",
-        env={**ENV, **wt},
+        env=env,
         **BASE,
         doc_md="Push the finished release branch to the fork.",
     )
@@ -37,7 +37,7 @@ def open_pr(worktree_path):
     open_pr_task = BashOperator(
         task_id="open",
         bash_command="open_pr.sh",
-        env={**ENV, **wt},
+        env=env,
         **BASE,
         output_processor=lambda o: o.strip().splitlines()[-1],  # PR URL (last line)
         doc_md="Open the feedstock PR titled exactly `<pkg> v<version>`; returns "

@@ -7,12 +7,16 @@
 # The worktree leaf dir MUST be exactly the feedstock repo name: conda-smithy
 # rerender derives the feedstock repo name from the directory basename, so a dir
 # like "<feedstock>-<version>" would rewrite README links to a bogus
-# "<feedstock>-<version>-feedstock" repo. So nest under a run-scoped parent:
-# /tmp/superreleaser-<run-key>/<feedstock-name>
+# "<feedstock>-<version>-feedstock" repo. So nest under a per-package parent:
+# /tmp/superreleaser-<run-key>/<feedstock-name>/<feedstock-name>
+#
+# The parent is per-PACKAGE, not just per-run: one simple_jai_release run
+# releases N packages in parallel, so a run-scoped `rm -rf "$parent"` below would
+# wipe sibling packages' worktrees mid-release.
 set -euo pipefail
 
 clone="$FEEDSTOCKS_ROOT/${FEEDSTOCK_NAME}"
-parent="/tmp/superreleaser-${RUN_KEY}"
+parent="/tmp/superreleaser-${RUN_KEY}/${FEEDSTOCK_NAME}"
 worktree="${parent}/${FEEDSTOCK_NAME}"
 branch="release-${VERSION}"
 

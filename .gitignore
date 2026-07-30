@@ -7,6 +7,9 @@
 # Locally cloned conda-forge feedstocks (cloned on demand by the prepare phase)
 feedstocks/
 
+# Locally cloned source repos (cloned on demand to edit jupyter-ai's pyproject)
+sources/
+
 # Python
 __pycache__/
 *.pyc

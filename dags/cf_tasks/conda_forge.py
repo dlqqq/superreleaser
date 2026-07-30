@@ -3,8 +3,13 @@
 This wraps the full pipeline (prepare → update recipe → open PR → approve →
 await CI → publish → clean up) so it can be dropped into any DAG as a single
 node. `cf_release` is just this group; `e2e_release` runs it after the PyPI
-release group. Task groups nest, so the inner phase groups (Prepare, Update
-feedstock, …) still show up nested underneath.
+release group; `simple_jai_release` runs it once per subpackage (mapped) and
+once more for jupyter-ai. Task groups nest, so the inner phase groups (Prepare,
+Update feedstock, …) still show up nested underneath.
+
+Every step is parameterized by `ident` (from `identity`), never by
+`params.package` — that's what makes the group usable inside a mapped group,
+where the package comes from the mapped item.
 """
 
 from __future__ import annotations
@@ -18,14 +23,13 @@ from . import update_recipe as update_mod
 from . import open_pr as open_pr_mod
 from . import publish as publish_mod
 from . import cleanup as cleanup_mod
-from ._common import BASE, ENV
+from ._common import BASE, env_from
 
 
 @task(task_id="build_gate_body", task_display_name="Build approval message")
-def build_gate_body(pr_url: str, diff: dict, **context) -> str:
+def build_gate_body(pr_url: str, diff: dict, ident: dict) -> str:
     """The Markdown shown at the conda-forge approval gate — PR link + dep changes."""
-    package = context["params"]["package"]
-    version = context["params"]["version"]
+    package, version = ident["PACKAGE"], ident["VERSION"]
     lines = [f"### Release `{package}` v{version} to conda-forge", "",
              f"**PR:** {pr_url}", ""]
     if diff:
@@ -40,20 +44,20 @@ def build_gate_body(pr_url: str, diff: dict, **context) -> str:
 
 
 @task_group(group_id="conda_forge_release", group_display_name="Release on Conda Forge")
-def conda_forge_release():
+def conda_forge_release(ident):
     """Full conda-forge release. Returns {"entry", "exit"} handles so a caller
     can gate the group's start (entry) and chain after its end (exit)."""
     # prepare: clone/fork + diff + verify dep names on conda-forge.
-    diff, verified, prepare_entry = prepare_mod.prepare()
+    diff, verified, prepare_entry = prepare_mod.prepare(ident)
 
     # update_recipe: build the release branch locally (worktree → write →
     # rerender → single commit). Gated behind prepare's dep verification.
-    upd = update_mod.update_recipe(diff)
+    upd = update_mod.update_recipe(ident, diff)
     verified >> upd["create_worktree"]
 
     # open_pr: push the finished branch + open the PR. Gate its entry behind the
     # commit, so CI runs once on the final head (no rerender-restarts-CI race).
-    pr = open_pr_mod.open_pr(upd["worktree_path"])
+    pr = open_pr_mod.open_pr(ident, upd["worktree_path"])
     upd["commit"] >> pr["push_branch"]
     pr_url = pr["pr_url"]
 
@@ -64,7 +68,7 @@ def conda_forge_release():
         task_id="approval",
         task_display_name="Await human approval",
         subject="conda-forge release approval",
-        body=build_gate_body(pr_url, diff),
+        body=build_gate_body(pr_url, diff, ident),
         fail_on_reject=True,
     )
 
@@ -74,18 +78,18 @@ def conda_forge_release():
         task_id="wait_for_ci",
         task_display_name="Await green CI",
         bash_command='gh pr checks "$PR_URL" --watch --fail-fast --interval 30',
-        env={**ENV, "PR_URL": pr_url},
+        env=env_from(ident, PR_URL=pr_url),
         **BASE,
         doc_md="Block until the PR's checks finish; pass/fail on the result.",
     )
 
     # publish: merge the approved + CI-green PR, then await conda-forge availability.
-    pub = publish_mod.publish(pr_url)
+    pub = publish_mod.publish(ident, pr_url)
 
     # cleanup (parallel, all_done): delete worktree, close PR if open, delete fork
     # branch. Anchored on the worktree creator + the final publish step so it
     # runs on success or partial failure alike.
-    clean = cleanup_mod.cleanup()
+    clean = cleanup_mod.cleanup(ident)
 
     pr["open"] >> approval >> wait_ci >> pub["merge"]
     anchors = [upd["create_worktree"], pub["await_conda_forge"]]
