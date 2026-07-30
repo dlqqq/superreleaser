@@ -26,7 +26,7 @@ from airflow.sdk import dag, Param
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from cf_tasks._common import MACROS, SCRIPTS
+from cf_tasks._common import MACROS, SCRIPTS, identity
 from cf_tasks.conda_forge import conda_forge_release
 from cf_tasks.pypi import pypi_release
 from superreleaser.registry import PACKAGE_NAMES
@@ -46,8 +46,11 @@ from superreleaser.registry import PACKAGE_NAMES
     user_defined_macros=MACROS,
 )
 def e2e_release():
-    pypi_done = pypi_release()          # returns await_pypi (the group's exit)
-    cf = conda_forge_release()          # {"entry", "exit"}
+    # One identity for both halves: resolve the registry names once, then thread
+    # them through. Same shape the mapped simple_jai_release uses.
+    ident = identity("{{ params.package }}", "{{ params.version }}")
+    pypi_done = pypi_release(ident)     # returns await_pypi (the group's exit)
+    cf = conda_forge_release(ident)     # {"entry", "exit"}
     # conda-forge's first task starts only once the version is live on PyPI.
     pypi_done >> cf["entry"]
 

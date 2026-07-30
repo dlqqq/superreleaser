@@ -46,9 +46,9 @@ def recipe_file(tmp_path):
 
 
 # The Python task's underlying function (unwrapped) — call it directly with a
-# fake context in place of Airflow's params injection.
+# literal `ident` in place of the XCom that `identity` would supply.
 _compute = prepare.compute_req_diff.function
-_PKG = {"params": {"package": "jupyter-ai-acp-client"}}
+_IDENT = {"FEEDSTOCK_NAME": "jupyter-ai-acp-client-feedstock"}
 
 
 def test_proc_pypi_requirements_drops_extras_and_sorts():
@@ -68,7 +68,7 @@ def test_compute_diff_maps_conda_names_and_ranges(recipe_file):
     # jupyter-server (PyPI) must map to the recipe's existing jupyter_server.
     reqs = [{"name": "jupyter-server", "spec": ">=2.5.0,<3"},
             {"name": "pydantic", "spec": ">=2,<3"}]
-    diff = _compute(reqs, **_PKG)
+    diff = _compute(reqs, _IDENT)
     # jupyter_server range changed → present; pydantic unchanged → deduped out.
     assert diff["jupyter_server"] == {
         "old": ">=2.4.0,<3", "new": ">=2.5.0,<3", "resolved": True}
@@ -79,12 +79,12 @@ def test_compute_diff_dedupes_unchanged(recipe_file):
     # Every range identical to the recipe → empty diff (nothing to change).
     reqs = [{"name": "jupyter-server", "spec": ">=2.4.0,<3"},
             {"name": "pydantic", "spec": ">=2,<3"}]
-    assert _compute(reqs, **_PKG) == {}
+    assert _compute(reqs, _IDENT) == {}
 
 
 def test_compute_diff_flags_new_unresolved_dep(recipe_file, monkeypatch):
     from superreleaser import condaforge
     monkeypatch.setattr(condaforge, "resolve_conda_name", lambda n: None)
     reqs = [{"name": "totally-new-dep", "spec": ">=1"}]
-    diff = _compute(reqs, **_PKG)
+    diff = _compute(reqs, _IDENT)
     assert diff["totally-new-dep"] == {"old": None, "new": ">=1", "resolved": False}

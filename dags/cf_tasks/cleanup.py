@@ -15,17 +15,19 @@ from __future__ import annotations
 from airflow.sdk import task_group
 from airflow.providers.standard.operators.bash import BashOperator
 
-from ._common import BASE, ENV
+from ._common import BASE, env_from
 
 
 @task_group(group_id="cleanup", group_display_name="Clean up")
-def cleanup():
+def cleanup(ident):
     """Remove the worktree and close the PR if still open (both best-effort)."""
+    env = env_from(ident)
+
     delete_worktree = BashOperator(
         task_id="delete_worktree",
         task_display_name="Delete worktree",
         bash_command="cleanup.sh",
-        env=ENV,
+        env=env,
         **BASE,
         trigger_rule="all_done",
         doc_md="Remove the /tmp release worktree (best-effort).",
@@ -35,7 +37,7 @@ def cleanup():
         task_id="close_pr",
         task_display_name="Close PR if open",
         bash_command="close_pr.sh",
-        env=ENV,
+        env=env,
         **BASE,
         trigger_rule="all_done",
         doc_md="Close the release PR if it's still open (no-op once merged).",
@@ -45,7 +47,7 @@ def cleanup():
         task_id="delete_remote_branch",
         task_display_name="Delete fork branch",
         bash_command="delete_remote_branch.sh",
-        env=ENV,
+        env=env,
         **BASE,
         trigger_rule="all_done",
         doc_md="Delete the fork's remote release branch if it exists.",

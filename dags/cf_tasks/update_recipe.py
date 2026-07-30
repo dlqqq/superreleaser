@@ -23,17 +23,16 @@ from pathlib import Path
 from airflow.sdk import task, task_group
 from airflow.providers.standard.operators.bash import BashOperator
 
-from ._common import BASE, ENV
-from superreleaser import condaforge, recipe as rcp, registry
+from ._common import BASE, env_from
+from superreleaser import condaforge, recipe as rcp
 
 
 @task(task_id="write_recipe")
-def write_recipe(worktree: str, diff: dict, **context) -> str:
+def write_recipe(worktree: str, diff: dict, ident: dict) -> str:
     """Write version + sha256 + the new run block into the worktree's recipe.
     Returns the worktree path (passthrough, so downstream bash can depend on it)."""
-    package = context["params"]["package"]
-    version = context["params"]["version"].lstrip("v")
-    pypi_name = registry.get(package).pypi_name
+    version = ident["VERSION"]
+    pypi_name = ident["PYPI_NAME"]
     recipe_file = Path(worktree) / "recipe" / "recipe.yaml"
     text = recipe_file.read_text()
 
@@ -48,7 +47,7 @@ def write_recipe(worktree: str, diff: dict, **context) -> str:
 
 
 @task_group(group_id="update_recipe", group_display_name="Update feedstock")
-def update_recipe(diff):
+def update_recipe(ident, diff):
     """Build the release branch locally (no remote side effects).
 
     Returns a dict of handles:
@@ -57,25 +56,27 @@ def update_recipe(diff):
       - `commit` (task) — the last task, so the next group depends on it;
       - `worktree_path` (XComArg) — the /tmp worktree path.
     """
+    env = env_from(ident)
+
     # 1. Fresh worktree in /tmp on the release branch.
     create_worktree = BashOperator(
         task_id="create_worktree",
         bash_command="create_worktree.sh",
-        env=ENV,
+        env=env,
         **BASE,
         doc_md="Create a git worktree under /tmp on a `release-<version>` branch, "
         "off the feedstock clone's default branch.",
     )
 
     # 2. Write the recipe (Python: sha256 + apply diff + bump version).
-    written = write_recipe(create_worktree.output, diff)
+    written = write_recipe(create_worktree.output, diff, ident)
     wt = {"WORKTREE": written}
 
     # 3. Re-render locally (no commit — the commit step captures it).
     rerender = BashOperator(
         task_id="rerender",
         bash_command="rerender.sh",
-        env={**ENV, **wt},
+        env=env_from(ident, **wt),
         **BASE,
         doc_md="Run `conda smithy rerender` locally, leaving changes uncommitted.",
     )
@@ -84,7 +85,7 @@ def update_recipe(diff):
     commit = BashOperator(
         task_id="commit",
         bash_command="commit.sh",
-        env={**ENV, **wt},
+        env=env_from(ident, **wt),
         **BASE,
         doc_md="Single commit `<pkg> v<version>` (recipe bump + rerender).",
     )
