@@ -56,7 +56,7 @@ and the `jupyter_ai_version` to cut:
 |-------|------|
 | `plan_release` | Validate every entry, then check PyPI: a subpackage already at its version is dropped from the release list (but still range-bumped below), so a partially-completed wave can be re-run. |
 | `release_subpackage` (mapped) | The **full `e2e_release` flow per subpackage, in parallel** — each with its own PyPI and conda-forge gates. Phase B waits for all of them. |
-| `bump_ranges` | Rewrite jupyter-ai's `pyproject.toml` so each subpackage's range names the version just published, open a PR, gate, `wait_for_ci`, squash-merge. Skips itself when no range actually changes. |
+| `bump_ranges` | Rewrite jupyter-ai's `pyproject.toml` so each subpackage's range names the version just published, open a PR **from your fork** (labelled `maintenance`), gate, `wait_for_ci`, squash-merge. Skips itself when no range actually changes. |
 | `release_docs` | `Step 0: Prep release documentation` → gate on the generated changelog → merge the docs PR (Step 1 builds from the merged branch). |
 | `pypi_release` → `conda_forge_release` | jupyter-ai's own end-to-end release, the same two groups the single-package DAGs use. |
 

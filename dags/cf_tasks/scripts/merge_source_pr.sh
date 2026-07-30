@@ -20,6 +20,19 @@ if [ "$(gh pr view "$PR_URL" --repo "$REPO" --json isDraft --jq '.isDraft')" = "
   gh pr ready "$PR_URL" --repo "$REPO" >&2
 fi
 
-gh pr merge "$PR_URL" --repo "$REPO" --squash --delete-branch \
+gh pr merge "$PR_URL" --repo "$REPO" --squash \
   --subject "${title} (#${num})" --body ""
 echo "merged ${PR_URL} as '${title} (#${num})'"
+
+# Delete the head branch separately (not via --delete-branch) so a failure here
+# can't fail the task after the merge already landed. The head repo is the fork
+# for the range bump and the upstream repo for the Step 0 docs PR.
+head_repo="$(gh pr view "$PR_URL" --repo "$REPO" \
+             --json headRepositoryOwner,headRepository \
+             --jq '.headRepositoryOwner.login + "/" + .headRepository.name')"
+head_ref="$(gh pr view "$PR_URL" --repo "$REPO" --json headRefName --jq '.headRefName')"
+if gh api -X DELETE "repos/${head_repo}/git/refs/heads/${head_ref}" >/dev/null 2>&1; then
+  echo "deleted ${head_repo}:${head_ref}"
+else
+  echo "could not delete ${head_repo}:${head_ref} (ignored)"
+fi

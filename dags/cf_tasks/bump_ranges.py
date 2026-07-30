@@ -9,7 +9,7 @@ for someone to merge later.
   clone_source     — clone jupyter-ai, branch off the default branch
   edit_pyproject   — rewrite the ranges (superreleaser.pyproject), build the PR body
   changes_to_push  — short-circuit: nothing changed → skip the PR/gate/merge
-  open_bump_pr     — commit + push + open the PR
+  open_bump_pr     — commit + push to a fork + open the PR (labelled `maintenance`)
   approval         — human reviews the range diff
   wait_for_ci      — the PR's checks must pass before merging
   merge_bump_pr    — squash-merge so Step 0/1 see the bumped pyproject
@@ -117,7 +117,8 @@ def bump_ranges(repo: str, version: str, wanted, entry_trigger_rule="all_success
         trigger_rule=entry_trigger_rule,
         **BASE,
         output_processor=lambda o: o.strip().splitlines()[-1],  # checkout path
-        doc_md="Clone the source repo locally and branch off its default branch.",
+        doc_md="Clone the source repo locally, ensure a fork exists, and branch "
+        "off the default branch.",
     )
 
     edit = edit_pyproject(clone.output, wanted, version)
@@ -142,7 +143,8 @@ def bump_ranges(repo: str, version: str, wanted, entry_trigger_rule="all_success
         env={**env, "CHECKOUT": clone.output, "TITLE": title, "BODY": edit["body"]},
         **BASE,
         output_processor=lambda o: o.strip().splitlines()[-1],  # PR URL
-        doc_md="Commit the pyproject edit, push the branch, and open the PR.",
+        doc_md="Commit the pyproject edit, push the branch to your fork, and open "
+        "the PR against the upstream repo.",
     )
     pr_url = open_pr.output
 
