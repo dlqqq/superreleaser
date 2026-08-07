@@ -41,6 +41,20 @@ from superreleaser.registry import PACKAGE_NAMES
     params={
         "package": Param("jupyter-ai-acp-client", type="string", enum=PACKAGE_NAMES),
         "version": Param("", type="string"),
+        # Optional branch overrides for backports. Blank = the repo's default
+        # branch (jupyter-releaser falls back to it; the feedstock scripts fall
+        # back to origin/HEAD). Set these to release off a maintenance branch,
+        # e.g. cut a 0.2.x patch while main is on 0.3.x.
+        "source_branch": Param(
+            "", type="string",
+            description="Source-repo branch to run the Jupyter Releaser "
+            "workflows against (blank = repo default).",
+        ),
+        "feedstock_branch": Param(
+            "", type="string",
+            description="Feedstock branch to base the release branch on and "
+            "open the PR against (blank = feedstock default).",
+        ),
     },
     template_searchpath=[SCRIPTS],
     user_defined_macros=MACROS,

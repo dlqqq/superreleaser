@@ -3,12 +3,19 @@
 # emit the draft-release URL as the last line (for XCom). Jupyter Releaser's
 # prep-release action prints `Setting output release_url=...` in the run log;
 # that's the stable place to read the draft URL from.
-# Inputs (env): REPO, VERSION
+# Inputs (env): REPO, VERSION, SOURCE_BRANCH (optional)
 set -euo pipefail
 
-# Kick off Step 1 (version_spec = the explicit version we're releasing).
-gh workflow run "Step 1: Prep Release" --repo "$REPO" \
-  -f version_spec="$VERSION" >&2
+# Kick off Step 1 (version_spec = the explicit version we're releasing). When a
+# SOURCE_BRANCH is given, pass it as jupyter-releaser's `branch` input so the
+# release is cut from that branch (e.g. a 0.2.x backport); blank = repo default.
+# The workflow itself is still dispatched on the repo's default ref, so the
+# workflow file is always the one on the default branch.
+args=(-f version_spec="$VERSION")
+if [ -n "${SOURCE_BRANCH:-}" ]; then
+  args+=(-f branch="$SOURCE_BRANCH")
+fi
+gh workflow run "Step 1: Prep Release" --repo "$REPO" "${args[@]}" >&2
 
 # The run doesn't appear instantly; wait for the newest prep-release run to show
 # up, then watch it to completion (fail the task if it fails).
