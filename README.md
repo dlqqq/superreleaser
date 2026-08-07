@@ -11,6 +11,20 @@ review at the gates **in the Airflow UI**, and it drives the rest.
 
 Both take a `package` (dropdown, from the registry) and an explicit `version`.
 
+Both also accept optional **branch** inputs for backports (blank = the repo's
+default branch):
+
+- `feedstock_branch` (both DAGs) — base the release branch on, and open the
+  conda-forge PR against, this feedstock branch (e.g. a `0.2.x` maintenance
+  branch). Blank falls back to the feedstock's default branch.
+- `source_branch` (`e2e_release` only) — run the Jupyter Releaser workflows
+  against this source-repo branch (passed as the workflows' `branch` input).
+  Blank falls back to the repo default.
+
+> Example: main is on `0.3.x` but you need to ship a `0.2.6` security backport —
+> set `source_branch=0.2.x` and `feedstock_branch=0.2.x` so both halves target
+> the maintenance line instead of `main`.
+
 **`e2e_release`** — the full release. Runs the repo's `Step 1: Prep Release` and
 `Step 2: Publish Release` workflows with a human gate between them, waits for
 PyPI, then hands off to `cf_release`:

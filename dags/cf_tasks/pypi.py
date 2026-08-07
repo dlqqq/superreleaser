@@ -88,7 +88,7 @@ def pypi_release():
         task_id="prep_release",
         task_display_name="Prep release (Step 1)",
         bash_command="prep_release.sh",
-        env=ENV,
+        env={**ENV, "SOURCE_BRANCH": "{{ params.source_branch }}"},
         **BASE,
         output_processor=lambda o: o.strip().splitlines()[-1],  # draft URL
         doc_md="Run 'Step 1: Prep Release', watch it, and capture the draft "
@@ -109,7 +109,8 @@ def pypi_release():
         task_id="publish_release",
         task_display_name="Publish release (Step 2)",
         bash_command="publish_release.sh",
-        env={**ENV, "RELEASE_URL": release_url},
+        env={**ENV, "RELEASE_URL": release_url,
+             "SOURCE_BRANCH": "{{ params.source_branch }}"},
         **BASE,
         doc_md="Run 'Step 2: Publish Release' with the draft URL, watch to green.",
     )

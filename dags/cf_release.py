@@ -36,6 +36,14 @@ from superreleaser.registry import PACKAGE_NAMES
     params={
         "package": Param("jupyter-ai-acp-client", type="string", enum=PACKAGE_NAMES),
         "version": Param("", type="string"),
+        # Optional: base the release branch on / open the PR against a
+        # non-default feedstock branch (e.g. a 0.2.x maintenance branch for a
+        # backport). Blank = the feedstock's default branch (origin/HEAD).
+        "feedstock_branch": Param(
+            "", type="string",
+            description="Feedstock branch to base the release branch on and "
+            "open the PR against (blank = feedstock default).",
+        ),
     },
     template_searchpath=[SCRIPTS],
     user_defined_macros=MACROS,  # exposes pkg(name) → registry entry in Jinja

@@ -40,6 +40,9 @@ ENV = {
     "REPO": "{{ pkg(params.package).repo }}",
     "FEEDSTOCK_REPO": "{{ pkg(params.package).feedstock_repo }}",
     "FEEDSTOCK_NAME": "{{ pkg(params.package).feedstock_repo.split('/')[1] }}",
+    # Optional feedstock branch override (blank = the feedstock's default
+    # branch; the scripts fall back to origin/HEAD when this is empty).
+    "FEEDSTOCK_BRANCH": "{{ params.feedstock_branch }}",
     "FEEDSTOCKS_ROOT": str(config.FEEDSTOCKS_ROOT),
     "RUN_KEY": "{{ run_id | replace(':','-') | replace('+','-') | replace('.','-') }}",
 }

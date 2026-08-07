@@ -4,14 +4,21 @@
 # so it doesn't depend on `gh repo set-default` or which remote is "default".
 # Title is exactly "<pkg> v<version>" so a squash merge yields "… (#N)".
 # Prints the PR URL as the last line (for XCom).
-# Inputs (env): WORKTREE, FEEDSTOCK_REPO, PACKAGE, VERSION
+# Inputs (env): WORKTREE, FEEDSTOCK_REPO, PACKAGE, VERSION,
+#               FEEDSTOCK_BRANCH (optional)
 set -euo pipefail
 
 cd "$WORKTREE"
 base_repo="$FEEDSTOCK_REPO"
 owner="$(gh api user --jq .login)"          # where `gh repo fork` put the fork
 head="${owner}:release-${VERSION}"
-base="$(git symbolic-ref --short refs/remotes/origin/HEAD | sed 's|origin/||')"
+# PR base: the explicit FEEDSTOCK_BRANCH (must match create_worktree's base)
+# when given, else the feedstock's default branch via origin/HEAD.
+if [ -n "${FEEDSTOCK_BRANCH:-}" ]; then
+  base="$FEEDSTOCK_BRANCH"
+else
+  base="$(git symbolic-ref --short refs/remotes/origin/HEAD | sed 's|origin/||')"
+fi
 title="${PACKAGE} v${VERSION}"
 
 # conda-forge's standard PR checklist + an auto-generated note. Our workflow
