@@ -91,25 +91,24 @@ def test_e2e_publish_gated_by_approval(e2e_dag):
     assert "pypi_release.approval" in up
 
 
-def test_rejected_draft_cleanup_is_conditional_and_all_done(e2e_dag):
+def test_rejected_draft_cleanup_is_conditional_and_one_failed(e2e_dag):
     t = e2e_dag.get_task("pypi_release.delete_rejected_draft")
-    assert t.trigger_rule == "all_done"
+    # one_failed: fires only when a parent failed (reject / publish failure),
+    # skipped on a clean published run.
+    assert t.trigger_rule == "one_failed"
     # @task.run_if installs its condition as a pre-execute hook; a plain task
-    # wouldn't have one. This distinguishes the conditional gate from an
-    # always-run task that branches internally.
+    # wouldn't have one. This is the belt-and-suspenders isDraft guard.
     assert t._pre_execute_hook is not None
 
 
-def test_rejected_draft_cleanup_hangs_off_await_pypi(e2e_dag):
-    # The cleanup must wait for the terminal node (await_pypi) rather than
-    # firing straight off approval. Hanging it off approval races publish_release
-    # on approve: the run_if isDraft check would read the draft before Step 2
-    # published and delete it. Downstream of await_pypi, the condition is only
-    # evaluated once the publish path has settled → SKIP on approve, delete on
-    # reject (await_pypi is upstream_failed, still an all_done state).
+def test_rejected_draft_cleanup_children_of_approval_and_publish(e2e_dag):
+    # Parents are approval + publish_release so the cleanup covers both a
+    # rejected gate and a post-approval Step 2 failure. It must NOT depend on
+    # await_pypi (a published release needs no draft cleanup).
     t = e2e_dag.get_task("pypi_release.delete_rejected_draft")
-    assert "pypi_release.await_pypi" in t.upstream_task_ids
-    assert "pypi_release.approval" not in t.upstream_task_ids
+    assert "pypi_release.approval" in t.upstream_task_ids
+    assert "pypi_release.publish_release" in t.upstream_task_ids
+    assert "pypi_release.await_pypi" not in t.upstream_task_ids
 
 
 def test_prep_release_always_since_last_stable():

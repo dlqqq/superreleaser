@@ -8,13 +8,15 @@ and waits for the version to land on PyPI:
   approval               review the draft; reject → stop (and delete the draft)
   publish_release        gh "Step 2: Publish Release" → publishes to PyPI
   await_pypi              poll PyPI until the version is available
-  delete_rejected_draft   after await_pypi settles, run_if a draft is still
-                          unpublished: delete it (else skip)
+  delete_rejected_draft   one_failed off approval+publish: delete the draft when
+                          the release was NOT published (else skip)
 
-The rejected-draft cleanup is gated with @task.run_if (a declarative condition)
-rather than an always-run task that branches internally, and hangs off the
-terminal await_pypi node so its condition is evaluated only after the publish
-path has settled (never racing Step 2).
+The rejected-draft cleanup uses trigger_rule="one_failed" hanging off both the
+approval gate and publish_release, so it fires only when the release was not
+published (gate rejected, or Step 2 failed after approval) and is skipped on a
+clean success. Because one_failed can only trigger on a failed parent, it never
+races publish_release. @task.run_if (the isDraft ground-truth probe) stays as a
+belt-and-suspenders guard.
 """
 
 from __future__ import annotations
@@ -130,16 +132,20 @@ def pypi_release():
         doc_md="Poll PyPI until the released version's metadata is available.",
     )
 
-    # Conditional cleanup: only runs if an unpublished draft still exists (i.e.
-    # rejected/abandoned). @task.run_if is the native declarative gate — the task
-    # SKIPS on approval, no hardcoded branch inside it.
+    # Conditional cleanup: only runs when the release was NOT published — i.e.
+    # the gate was rejected, or Step 2 failed after approval. trigger_rule
+    # "one_failed" fires this as soon as one of its parents (approval, publish)
+    # reaches a failed/upstream_failed state, and SKIPS it entirely when both
+    # succeed (the normal published path). @task.run_if / the isDraft probe stay
+    # as a belt-and-suspenders guard so a race or odd state never deletes a
+    # genuinely published release.
     @task.run_if(_draft_still_unpublished)
     @task.bash(
         task_id="delete_rejected_draft",
         task_display_name="Delete rejected draft release",
         env={**ENV, "RELEASE_URL": release_url},
         append_env=True,
-        trigger_rule="all_done",  # runs once await_pypi is done (incl. upstream_failed on reject)
+        trigger_rule="one_failed",  # only on reject / publish failure, never on full success
     )
     def delete_rejected_draft() -> str:
         # @task.bash runs the returned string (no .sh searchpath lookup like
@@ -147,14 +153,12 @@ def pypi_release():
         return f"bash {SCRIPTS}/delete_draft.sh"
 
     prep >> approval >> publish >> await_pypi
-    # Rejected-draft cleanup hangs off await_pypi (the terminal node), NOT
-    # approval. With trigger_rule="all_done" it becomes runnable once the publish
-    # path has reached a terminal state:
-    #   • approved  → publish + await_pypi succeed → run_if sees isDraft=false → SKIP
-    #   • rejected  → approval fails → publish/await_pypi are upstream_failed
-    #                 (still "done") → run_if sees isDraft=true → delete the draft
-    # Hanging it off approval instead would let it race publish_release: run_if
-    # would read isDraft before Step 2 published, see true, and delete the draft
-    # that was about to be published.
-    await_pypi >> delete_rejected_draft()
+    # Rejected-draft cleanup is a child of BOTH approval and publish with
+    # trigger_rule="one_failed":
+    #   • rejected           → approval fails                    → fire, delete draft
+    #   • approved, Step 2 KO → publish fails (draft unpublished) → fire, delete draft
+    #   • full success        → nothing failed                   → SKIP
+    # one_failed can only trigger on a failed parent, so it never races
+    # publish_release (which lives on the success branch).
+    [approval, publish] >> delete_rejected_draft()
     return await_pypi
