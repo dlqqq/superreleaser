@@ -69,10 +69,14 @@ def test_rerender_waits_for_smithy_upgrade(cf_dag):
 
 def test_upgrade_smithy_installs_after_update():
     # `pixi update` only rewrites the lock; `pixi install` must follow to sync
-    # the new conda-smithy into the running env.
+    # the new conda-smithy into the running env. Inspect command lines only
+    # (comments mention both, in prose).
     from cf_tasks._common import SCRIPTS
-    script = (Path(SCRIPTS) / "upgrade_smithy.sh").read_text()
-    assert script.index("pixi update conda-smithy") < script.index("pixi install")
+    cmds = [ln.strip() for ln in (Path(SCRIPTS) / "upgrade_smithy.sh").read_text().splitlines()
+            if ln.strip() and not ln.lstrip().startswith("#")]
+    upd = next(i for i, c in enumerate(cmds) if c.startswith("pixi update conda-smithy"))
+    inst = next(i for i, c in enumerate(cmds) if c.startswith("pixi install"))
+    assert upd < inst
 
 
 def test_cleanup_runs_regardless(cf_dag):
