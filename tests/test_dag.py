@@ -45,7 +45,7 @@ def test_expected_tasks_present(cf_dag):
         "prepare.clone_feedstock", "prepare.ensure_fork", "prepare.get_new_reqs",
         "prepare.compute_req_diff", "prepare.verify_conda",
         "update_recipe.create_worktree", "update_recipe.write_recipe",
-        "update_recipe.rerender", "update_recipe.commit",
+        "update_recipe.upgrade_smithy", "update_recipe.rerender", "update_recipe.commit",
         "open_pr.push_branch", "open_pr.open",
         "wait_for_ci", "approval",
         "publish.merge", "publish.await_conda_forge",
@@ -58,6 +58,13 @@ def test_merge_waits_for_ci(cf_dag):
     # Sequential: approval → wait_for_ci → merge.
     assert f"{_CF}.wait_for_ci" in cf_dag.get_task(f"{_CF}.publish.merge").upstream_task_ids
     assert f"{_CF}.approval" in cf_dag.get_task(f"{_CF}.wait_for_ci").upstream_task_ids
+
+
+def test_rerender_waits_for_smithy_upgrade(cf_dag):
+    # conda-smithy is upgraded to the newest allowed version before rerender, so
+    # rerender never aborts on its own staleness guard.
+    up = cf_dag.get_task(f"{_CF}.update_recipe.rerender").upstream_task_ids
+    assert f"{_CF}.update_recipe.upgrade_smithy" in up
 
 
 def test_cleanup_runs_regardless(cf_dag):
@@ -101,13 +108,15 @@ def test_rejected_draft_cleanup_is_conditional_and_one_failed(e2e_dag):
     assert t._pre_execute_hook is not None
 
 
-def test_rejected_draft_cleanup_children_of_approval_and_publish(e2e_dag):
-    # Parents are approval + publish_release so the cleanup covers both a
-    # rejected gate and a post-approval Step 2 failure. It must NOT depend on
-    # await_pypi (a published release needs no draft cleanup).
+def test_rejected_draft_cleanup_child_of_approval_only(e2e_dag):
+    # Reject-only: approval is the sole *gating* parent so the draft is deleted
+    # only on a rejected gate. (prep_release is also upstream — implicitly, via
+    # the RELEASE_URL XCom it consumes — but that carries no trigger semantics.)
+    # It must NOT watch publish_release (a late Step 2 failure can still have
+    # published the release — its notes must be left intact) nor await_pypi.
     t = e2e_dag.get_task("pypi_release.delete_rejected_draft")
     assert "pypi_release.approval" in t.upstream_task_ids
-    assert "pypi_release.publish_release" in t.upstream_task_ids
+    assert "pypi_release.publish_release" not in t.upstream_task_ids
     assert "pypi_release.await_pypi" not in t.upstream_task_ids
 
 

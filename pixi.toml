@@ -12,7 +12,9 @@ python = "3.12.*"
 apache-airflow = "3.3.*"
 apache-airflow-providers-standard = "1.15.*"
 # Release tooling — all real conda-forge packages (the whole point of pixi here):
-#   conda-smithy: feedstock rerender (kept current, unlike a stale global install)
+#   conda-smithy: feedstock rerender. Floor only, NO ceiling: the update_recipe
+#     group runs `pixi update conda-smithy` before rerendering so it always
+#     tracks the newest release (rerender aborts if conda-smithy is out of date).
 #   conda: `conda search` availability checks
 #   jq: JSON wrangling in the bash step scripts
 conda-smithy = ">=2026.6.14"

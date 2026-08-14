@@ -8,14 +8,14 @@ and waits for the version to land on PyPI:
   approval               review the draft; reject → stop (and delete the draft)
   publish_release        gh "Step 2: Publish Release" → publishes to PyPI
   await_pypi              poll PyPI until the version is available
-  delete_rejected_draft   one_failed off approval+publish: delete the draft when
-                          the release was NOT published (else skip)
+  delete_rejected_draft   one_failed off approval: delete the draft ONLY when
+                          the gate is rejected (else skip)
 
-The rejected-draft cleanup uses trigger_rule="one_failed" hanging off both the
-approval gate and publish_release, so it fires only when the release was not
-published (gate rejected, or Step 2 failed after approval) and is skipped on a
-clean success. Because one_failed can only trigger on a failed parent, it never
-races publish_release. @task.run_if (the isDraft ground-truth probe) stays as a
+The rejected-draft cleanup uses trigger_rule="one_failed" hanging off the
+approval gate alone, so it fires only when the human rejects (approval fails)
+and is skipped on approve. It deliberately does not watch publish_release: Step 2
+can fail late even though the release went through, so a publish failure must
+never delete the release notes. @task.run_if (the isDraft probe) stays as a
 belt-and-suspenders guard.
 """
 
@@ -132,20 +132,20 @@ def pypi_release():
         doc_md="Poll PyPI until the released version's metadata is available.",
     )
 
-    # Conditional cleanup: only runs when the release was NOT published — i.e.
-    # the gate was rejected, or Step 2 failed after approval. trigger_rule
-    # "one_failed" fires this as soon as one of its parents (approval, publish)
-    # reaches a failed/upstream_failed state, and SKIPS it entirely when both
-    # succeed (the normal published path). @task.run_if / the isDraft probe stay
-    # as a belt-and-suspenders guard so a race or odd state never deletes a
-    # genuinely published release.
+    # Conditional cleanup: runs ONLY when the human REJECTS the gate. approval
+    # has fail_on_reject=True, so reject → approval fails → trigger_rule
+    # "one_failed" fires this and deletes the abandoned draft. On approve,
+    # approval succeeds → this task is skipped. It is deliberately NOT a child of
+    # publish_release: Step 2 can fail late even though the release actually went
+    # through, so a publish failure must never delete the release notes. @task.run_if
+    # (the isDraft probe) stays as a belt-and-suspenders guard.
     @task.run_if(_draft_still_unpublished)
     @task.bash(
         task_id="delete_rejected_draft",
         task_display_name="Delete rejected draft release",
         env={**ENV, "RELEASE_URL": release_url},
         append_env=True,
-        trigger_rule="one_failed",  # only on reject / publish failure, never on full success
+        trigger_rule="one_failed",  # fires only when approval (its sole parent) fails = rejected
     )
     def delete_rejected_draft() -> str:
         # @task.bash runs the returned string (no .sh searchpath lookup like
@@ -153,12 +153,10 @@ def pypi_release():
         return f"bash {SCRIPTS}/delete_draft.sh"
 
     prep >> approval >> publish >> await_pypi
-    # Rejected-draft cleanup is a child of BOTH approval and publish with
-    # trigger_rule="one_failed":
-    #   • rejected           → approval fails                    → fire, delete draft
-    #   • approved, Step 2 KO → publish fails (draft unpublished) → fire, delete draft
-    #   • full success        → nothing failed                   → SKIP
-    # one_failed can only trigger on a failed parent, so it never races
-    # publish_release (which lives on the success branch).
-    [approval, publish] >> delete_rejected_draft()
+    # Rejected-draft cleanup is a child of approval ONLY, with
+    # trigger_rule="one_failed": it fires solely when the gate is rejected
+    # (approval fails). It never fires on approve (approval succeeds → skip), and
+    # deliberately does not watch publish_release — a late Step 2 failure may
+    # still have published the release, so its notes must be left intact.
+    approval >> delete_rejected_draft()
     return await_pypi

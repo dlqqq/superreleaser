@@ -8,8 +8,10 @@ and CI then runs exactly once on the final head.
                        branch, off the clone's default branch
   2. write_recipe    — (Python) fetch the PyPI sdist sha256, apply the diff onto
                        the existing run block, bump version + sha256
-  3. rerender        — `conda smithy rerender` (no commit; leaves changes staged)
-  4. commit          — ONE commit "<pkg> v<version>" capturing recipe + rerender
+  3. upgrade_smithy  — `pixi update conda-smithy` to the newest allowed version
+                       (it aborts the rerender otherwise if it is out of date)
+  4. rerender        — `conda smithy rerender` (no commit; leaves changes staged)
+  5. commit          — ONE commit "<pkg> v<version>" capturing recipe + rerender
 
 The recipe write is a Python @task (YAML/sha/diff logic); the git/smithy I/O are
 BashOperators running scripts/*.sh, so the exact commands show in the rendered
@@ -72,6 +74,18 @@ def update_recipe(diff):
     wt = {"WORKTREE": written}
 
     # 3. Re-render locally (no commit — the commit step captures it).
+    #    conda-smithy is bumped to the newest allowed version first: it aborts
+    #    the rerender if its installed version is older than the feedstock's pin.
+    upgrade_smithy = BashOperator(
+        task_id="upgrade_smithy",
+        task_display_name="Upgrade conda-smithy",
+        bash_command="upgrade_smithy.sh",
+        env=ENV,
+        **BASE,
+        doc_md="`pixi update conda-smithy` to the newest allowed version so "
+        "`conda smithy rerender` never fails its own staleness guard.",
+    )
+
     rerender = BashOperator(
         task_id="rerender",
         bash_command="rerender.sh",
@@ -89,7 +103,7 @@ def update_recipe(diff):
         doc_md="Single commit `<pkg> v<version>` (recipe bump + rerender).",
     )
 
-    create_worktree >> written >> rerender >> commit
+    create_worktree >> written >> upgrade_smithy >> rerender >> commit
     return {
         "create_worktree": create_worktree,
         "commit": commit,
