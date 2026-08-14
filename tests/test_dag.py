@@ -67,6 +67,14 @@ def test_rerender_waits_for_smithy_upgrade(cf_dag):
     assert f"{_CF}.update_recipe.upgrade_smithy" in up
 
 
+def test_upgrade_smithy_installs_after_update():
+    # `pixi update` only rewrites the lock; `pixi install` must follow to sync
+    # the new conda-smithy into the running env.
+    from cf_tasks._common import SCRIPTS
+    script = (Path(SCRIPTS) / "upgrade_smithy.sh").read_text()
+    assert script.index("pixi update conda-smithy") < script.index("pixi install")
+
+
 def test_cleanup_runs_regardless(cf_dag):
     for t in ("cleanup.delete_worktree", "cleanup.close_pr", "cleanup.delete_remote_branch"):
         assert cf_dag.get_task(f"{_CF}.{t}").trigger_rule == "all_done"
