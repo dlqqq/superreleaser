@@ -100,6 +100,27 @@ def test_rejected_draft_cleanup_is_conditional_and_all_done(e2e_dag):
     assert t._pre_execute_hook is not None
 
 
+def test_rejected_draft_cleanup_hangs_off_await_pypi(e2e_dag):
+    # The cleanup must wait for the terminal node (await_pypi) rather than
+    # firing straight off approval. Hanging it off approval races publish_release
+    # on approve: the run_if isDraft check would read the draft before Step 2
+    # published and delete it. Downstream of await_pypi, the condition is only
+    # evaluated once the publish path has settled → SKIP on approve, delete on
+    # reject (await_pypi is upstream_failed, still an all_done state).
+    t = e2e_dag.get_task("pypi_release.delete_rejected_draft")
+    assert "pypi_release.await_pypi" in t.upstream_task_ids
+    assert "pypi_release.approval" not in t.upstream_task_ids
+
+
+def test_prep_release_always_since_last_stable():
+    # Step 1 must always pass jupyter-releaser's `since_last_stable` boolean
+    # input (defaults to false/unchecked) so the changelog is built from PRs
+    # since the last *stable* tag.
+    from cf_tasks._common import SCRIPTS
+    script = (Path(SCRIPTS) / "prep_release.sh").read_text()
+    assert "-f since_last_stable=true" in script
+
+
 def test_package_param_is_registry_enum(cf_dag, e2e_dag):
     from superreleaser.registry import PACKAGE_NAMES
     for dag in (cf_dag, e2e_dag):
