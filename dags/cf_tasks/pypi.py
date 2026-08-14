@@ -7,11 +7,16 @@ and waits for the version to land on PyPI:
   build_release_gate     fetch the draft's changelog for the approval message
   approval               review the draft; reject → stop (and delete the draft)
   publish_release        gh "Step 2: Publish Release" → publishes to PyPI
-  await_pypi             poll PyPI until the version is available
-  delete_rejected_draft  run_if a draft is still unpublished: delete it (else skip)
+  await_pypi              poll PyPI until the version is available
+  delete_rejected_draft   one_failed off approval: delete the draft ONLY when
+                          the gate is rejected (else skip)
 
-The rejected-draft cleanup is gated with @task.run_if (a declarative condition)
-rather than an always-run task that branches internally.
+The rejected-draft cleanup uses trigger_rule="one_failed" hanging off the
+approval gate alone, so it fires only when the human rejects (approval fails)
+and is skipped on approve. It deliberately does not watch publish_release: Step 2
+can fail late even though the release went through, so a publish failure must
+never delete the release notes. @task.run_if (the isDraft probe) stays as a
+belt-and-suspenders guard.
 """
 
 from __future__ import annotations
@@ -127,16 +132,20 @@ def pypi_release():
         doc_md="Poll PyPI until the released version's metadata is available.",
     )
 
-    # Conditional cleanup: only runs if an unpublished draft still exists (i.e.
-    # rejected/abandoned). @task.run_if is the native declarative gate — the task
-    # SKIPS on approval, no hardcoded branch inside it.
+    # Conditional cleanup: runs ONLY when the human REJECTS the gate. approval
+    # has fail_on_reject=True, so reject → approval fails → trigger_rule
+    # "one_failed" fires this and deletes the abandoned draft. On approve,
+    # approval succeeds → this task is skipped. It is deliberately NOT a child of
+    # publish_release: Step 2 can fail late even though the release actually went
+    # through, so a publish failure must never delete the release notes. @task.run_if
+    # (the isDraft probe) stays as a belt-and-suspenders guard.
     @task.run_if(_draft_still_unpublished)
     @task.bash(
         task_id="delete_rejected_draft",
         task_display_name="Delete rejected draft release",
         env={**ENV, "RELEASE_URL": release_url},
         append_env=True,
-        trigger_rule="all_done",  # reachable even though `approval` failed
+        trigger_rule="one_failed",  # fires only when approval (its sole parent) fails = rejected
     )
     def delete_rejected_draft() -> str:
         # @task.bash runs the returned string (no .sh searchpath lookup like
@@ -144,6 +153,10 @@ def pypi_release():
         return f"bash {SCRIPTS}/delete_draft.sh"
 
     prep >> approval >> publish >> await_pypi
-    # The rejected-draft cleanup hangs off approval (it only fires on reject).
+    # Rejected-draft cleanup is a child of approval ONLY, with
+    # trigger_rule="one_failed": it fires solely when the gate is rejected
+    # (approval fails). It never fires on approve (approval succeeds → skip), and
+    # deliberately does not watch publish_release — a late Step 2 failure may
+    # still have published the release, so its notes must be left intact.
     approval >> delete_rejected_draft()
     return await_pypi

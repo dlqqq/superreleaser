@@ -11,7 +11,12 @@ set -euo pipefail
 # release is cut from that branch (e.g. a 0.2.x backport); blank = repo default.
 # The workflow itself is still dispatched on the repo's default ref, so the
 # workflow file is always the one on the default branch.
-args=(-f version_spec="$VERSION")
+#
+# since_last_stable=true always: build the changelog from PRs with activity
+# since the last *stable* git tag (jupyter-releaser's `since_last_stable` input,
+# a boolean that defaults to false/unchecked). This keeps prereleases from
+# truncating the changelog to only-since-the-last-prerelease.
+args=(-f version_spec="$VERSION" -f since_last_stable=true)
 if [ -n "${SOURCE_BRANCH:-}" ]; then
   args+=(-f branch="$SOURCE_BRANCH")
 fi

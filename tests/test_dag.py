@@ -45,7 +45,7 @@ def test_expected_tasks_present(cf_dag):
         "prepare.clone_feedstock", "prepare.ensure_fork", "prepare.get_new_reqs",
         "prepare.compute_req_diff", "prepare.verify_conda",
         "update_recipe.create_worktree", "update_recipe.write_recipe",
-        "update_recipe.rerender", "update_recipe.commit",
+        "update_recipe.upgrade_smithy", "update_recipe.rerender", "update_recipe.commit",
         "open_pr.push_branch", "open_pr.open",
         "wait_for_ci", "approval",
         "publish.merge", "publish.await_conda_forge",
@@ -58,6 +58,25 @@ def test_merge_waits_for_ci(cf_dag):
     # Sequential: approval → wait_for_ci → merge.
     assert f"{_CF}.wait_for_ci" in cf_dag.get_task(f"{_CF}.publish.merge").upstream_task_ids
     assert f"{_CF}.approval" in cf_dag.get_task(f"{_CF}.wait_for_ci").upstream_task_ids
+
+
+def test_rerender_waits_for_smithy_upgrade(cf_dag):
+    # conda-smithy is upgraded to the newest allowed version before rerender, so
+    # rerender never aborts on its own staleness guard.
+    up = cf_dag.get_task(f"{_CF}.update_recipe.rerender").upstream_task_ids
+    assert f"{_CF}.update_recipe.upgrade_smithy" in up
+
+
+def test_upgrade_smithy_installs_after_update():
+    # `pixi update` only rewrites the lock; `pixi install` must follow to sync
+    # the new conda-smithy into the running env. Inspect command lines only
+    # (comments mention both, in prose).
+    from cf_tasks._common import SCRIPTS
+    cmds = [ln.strip() for ln in (Path(SCRIPTS) / "upgrade_smithy.sh").read_text().splitlines()
+            if ln.strip() and not ln.lstrip().startswith("#")]
+    upd = next(i for i, c in enumerate(cmds) if c.startswith("pixi update conda-smithy"))
+    inst = next(i for i, c in enumerate(cmds) if c.startswith("pixi install"))
+    assert upd < inst
 
 
 def test_cleanup_runs_regardless(cf_dag):
@@ -91,13 +110,35 @@ def test_e2e_publish_gated_by_approval(e2e_dag):
     assert "pypi_release.approval" in up
 
 
-def test_rejected_draft_cleanup_is_conditional_and_all_done(e2e_dag):
+def test_rejected_draft_cleanup_is_conditional_and_one_failed(e2e_dag):
     t = e2e_dag.get_task("pypi_release.delete_rejected_draft")
-    assert t.trigger_rule == "all_done"
+    # one_failed: fires only when a parent failed (reject / publish failure),
+    # skipped on a clean published run.
+    assert t.trigger_rule == "one_failed"
     # @task.run_if installs its condition as a pre-execute hook; a plain task
-    # wouldn't have one. This distinguishes the conditional gate from an
-    # always-run task that branches internally.
+    # wouldn't have one. This is the belt-and-suspenders isDraft guard.
     assert t._pre_execute_hook is not None
+
+
+def test_rejected_draft_cleanup_child_of_approval_only(e2e_dag):
+    # Reject-only: approval is the sole *gating* parent so the draft is deleted
+    # only on a rejected gate. (prep_release is also upstream — implicitly, via
+    # the RELEASE_URL XCom it consumes — but that carries no trigger semantics.)
+    # It must NOT watch publish_release (a late Step 2 failure can still have
+    # published the release — its notes must be left intact) nor await_pypi.
+    t = e2e_dag.get_task("pypi_release.delete_rejected_draft")
+    assert "pypi_release.approval" in t.upstream_task_ids
+    assert "pypi_release.publish_release" not in t.upstream_task_ids
+    assert "pypi_release.await_pypi" not in t.upstream_task_ids
+
+
+def test_prep_release_always_since_last_stable():
+    # Step 1 must always pass jupyter-releaser's `since_last_stable` boolean
+    # input (defaults to false/unchecked) so the changelog is built from PRs
+    # since the last *stable* tag.
+    from cf_tasks._common import SCRIPTS
+    script = (Path(SCRIPTS) / "prep_release.sh").read_text()
+    assert "-f since_last_stable=true" in script
 
 
 def test_package_param_is_registry_enum(cf_dag, e2e_dag):
